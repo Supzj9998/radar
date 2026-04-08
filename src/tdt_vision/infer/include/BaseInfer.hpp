@@ -7,8 +7,9 @@
 namespace tdt_radar {
 
 #define GPU_BLOCK_THREADS 512
-
+//定义图像结构体
 struct Image {
+    //声明指向图像的指针和图像的宽高
     const void* bgrptr = nullptr;
     int         width = 0, height = 0;
 

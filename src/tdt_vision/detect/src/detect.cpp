@@ -8,8 +8,10 @@
 #define MAX_CARS 12
 #define MAX_ARMORS 20
 namespace tdt_radar {
+// 图片数量
 unsigned int count_img = 0;
 
+// 判断颜色
 int getColor(cv::Mat& img)
 {
     std::vector<cv::Mat> channels;
@@ -20,12 +22,15 @@ int getColor(cv::Mat& img)
     cv::Scalar avgRedMinusBlue = cv::mean(redMinusBlue);
     cv::Scalar avgGreen = cv::mean(channels[1]);
     if (avgBlueMinusRed[0] > avgRedMinusBlue[0]) {
+        // 偏蓝返回0
         return 0;
     } else {
+        // 偏红返回2
         return 2;
     }
 }
 
+// 判断小矩形是否完全被包含在大矩形
 bool isRectInside(const cv::Rect& small, const cv::Rect& big)
 {
     bool topLeftInside = big.contains(small.tl());
@@ -39,6 +44,7 @@ bool isRectInside(const cv::Rect& small, const cv::Rect& big)
             bottomRightInside);
 }
 
+// 判断一个yolo检测框是否完全在另一个yolo检测框中
 bool isBoxInside(const yolo::Box& small, const yolo::Box& big)
 {
     cv::Rect small_rect(small.left, small.top, small.right - small.left,
@@ -48,6 +54,7 @@ bool isBoxInside(const yolo::Box& small, const yolo::Box& big)
     return isRectInside(small_rect, big_rect);
 }
 
+// 安全裁剪roi函数
 cv::Rect getSafeRect(cv::Mat& image, cv::Rect& rect)
 {
     cv::Rect save_rect;
@@ -58,11 +65,13 @@ cv::Rect getSafeRect(cv::Mat& image, cv::Rect& rect)
     return save_rect;
 }
 
+// 初始化detect节点名："radar_detect_node"
 Detect::Detect(const rclcpp::NodeOptions& node_options)
     : Node("radar_detect_node", node_options)
 {
     cv::namedWindow("detect", cv::WINDOW_NORMAL);
 
+    // 检查 CUDA / NVIDIA 环境
     std::cout << "Checking CUDA with nvidia-smi...\n";
     if (system("nvidia-smi") == 0) {
         RCLCPP_INFO(this->get_logger(), "CUDA is available.");
@@ -70,6 +79,7 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
         RCLCPP_ERROR(this->get_logger(), "CUDA is not available. Exiting.");
         rclcpp::shutdown();
     }
+    // 读取模型路径
     cv::FileStorage fs;
     fs.open("./config/detect_params.yaml", cv::FileStorage::READ);
     fs["yolo_path"] >> yolo_path;
@@ -77,6 +87,7 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     fs["classify_path"] >> classify_path;
     fs.release();
 
+    // 检查 yolo engine
     std::ifstream file1(yolo_path.c_str());
     if (!file1.good()) {
         system("python3 src/utils/onnx2trt.py "
@@ -90,6 +101,7 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     } else {
         TDT_INFO("Load yolo engine!");
     }
+    // 检查 armor_yolo engine
     std::ifstream file2(armor_path.c_str());
     if (!file2.good()) {
         system("python3 src/utils/onnx2trt.py "
@@ -103,6 +115,7 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     } else {
         TDT_INFO("Load armor_yolo engine!");
     }
+    // 检查 classify engine
     std::ifstream file3(classify_path.c_str());
     if (!file3.good()) {
         system("python3 src/utils/onnx2trt.py "
@@ -116,20 +129,27 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     } else {
         TDT_INFO("Load classify engine!");
     }
+    // 打印路径
     std::cout << "yolo_path:" << yolo_path << "\n";
     std::cout << "armor_path:" << armor_path << "\n";
     std::cout << "classify_path:" << classify_path << "\n";
+
+    // 加载分类器
     this->classifier =
         classify::load(classify_path, classify::Type::densenet121);
     TDT_INFO("Load classify engine success!");
 
+    // 加载装甲板检测模型
     this->armor_yolo = yolo::load(armor_path, yolo::Type::V8, 0.4f, 0.45f);
     TDT_INFO("Load armor_yolo engine success!");
+    // 加载装甲板检测模型
     this->yolo = yolo::load(yolo_path, yolo::Type::V8, 0.65f, 0.45f);
     TDT_INFO("Load yolo engine success!");
+    // 创建图像订阅者，调用回调
     image_sub = this->create_subscription<sensor_msgs::msg::Image>(
         "camera_image", rclcpp::SensorDataQoS(),
         std::bind(&Detect::callback, this, std::placeholders::_1));
+    // 创建图像发布者
     pub = this->create_publisher<vision_interface::msg::DetectResult>(
         "detect_result", rclcpp::SensorDataQoS());
     RCLCPP_INFO(this->get_logger(), "Detect node has been started.");
@@ -137,13 +157,18 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
 
 void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
 {
+    // 记录开始时间
     std::chrono::steady_clock::time_point begin =
         std::chrono::steady_clock::now();
     std::cout << "Detecting..." << std::endl;
+    // ros图像转opencv图像
     auto             img = cv_bridge::toCvShare(msg, "bgr8")->image;
+    // opencv图像转推理输入格式
     tdt_radar::Image image(img.data, img.cols, img.rows);
 
+    // yolo整车检测
     auto result = yolo->forward(image);
+    // 初筛，防止车辆过多/过少
     if (result.size() == 0) {
         RCLCPP_INFO(this->get_logger(), "No Car!");
         return;
@@ -155,6 +180,7 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
     std::vector<tdt_radar::Image> images;
     std::vector<cv::Mat>          car_imgs;
     std::vector<Car>              cars;
+    // 将yolo的输出转换成car类型
     for (auto& box : result) {
         if (box.class_label == 0 || box.class_label == 1) {
             Car car;
@@ -163,6 +189,7 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
         }
     }
 
+    // 裁剪出每辆车的roi
     for (auto& car : cars) {
         auto     temp_rect = cv::Rect(car.car.left, car.car.top,
                                       car.car.right - car.car.left,
@@ -173,13 +200,16 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
         car.car_rect = temp_car_rect;
     }
 
+    // 将每辆车的roi转换成推理输入格式
     for (auto& car_img : car_imgs) {
         auto image =
             tdt_radar::Image(car_img.data, car_img.cols, car_img.rows);
         images.push_back(image);
     }
 
+    // yolo装甲板检测
     auto armor_boxes = armor_yolo->forwards(images);
+    // 将每辆车对应装甲板存回car
     bool has_armor = false;
     for (int i = 0; i < armor_boxes.size(); i++) {
         if (armor_boxes[i].size() == 0) {
@@ -193,6 +223,8 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
         RCLCPP_INFO(this->get_logger(), "No Armor!");
         return;
     }
+
+    // 保存装甲板图片
     // for(int i=0;i<cars.size();i++){
     //   if(cars[i].armors.size()==0){continue;}
     //   for(auto &armor:cars[i].armors){
@@ -205,9 +237,12 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
     //     cv::imwrite("/home/tdt/Label/armor_detect/"+std::to_string(count_img++)+".jpg",img(rect_img));
     //     }
     // }//这段是用来打印或者保存armor的图片
+
+    // 分类阶段数据容器
     std::vector<cv::Mat>         armor_imgs;
     std::vector<classify::Image> armor_images;
 
+    // 从每辆车的途中裁剪出装甲板roi
     for (auto& car : cars) {
         if (car.armors.size() == 0) {
             continue;
@@ -221,11 +256,13 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
             armor_imgs.push_back(armor_img.clone());
         }
     }
+    // 将装甲板roi转成分类器输入格式
     for (auto& armor_img : armor_imgs) {
         auto image =
             classify::Image(armor_img.data, armor_img.cols, armor_img.rows);
         armor_images.push_back(image);
     }
+    // 分类
     auto armor_result = classifier->forwards(armor_images);
 
     // 保存用来训练分类
@@ -233,6 +270,7 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
     //    cv::imwrite("/home/mozihe/Label/fenqu_armor/"+std::to_string(armor_result[i])+"/"+std::to_string(count_img++)+".jpg",armor_imgs[i]);
     //  }
 
+    // 把分类结果写回每个函数框
     for (auto& car : cars) {
         if (car.armors.size() == 0) {
             continue;
@@ -249,7 +287,9 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
             }
         }
     }
+    // 创建要发布的ros消息
     vision_interface::msg::DetectResult detect_result;
+    // 选择每辆车置信度最高的装甲板
     for (auto& car : cars) {
         if (car.armors.size() == 0) {
             continue;
@@ -266,18 +306,21 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
                 car.number = armor.class_label;
             }
         }
+        // 如没有装甲板画白框跳过
         if (max_confidence == 0) {
             if (debug)
                 cv::rectangle(img, car.car_rect, cv::Scalar(255, 255, 255),
                               2);
             continue;
         }
+        // 判断最优装甲板的颜色并计算中心点
         auto safe_rect = getSafeRect(img, max_rect);
         auto max_mat = img(safe_rect);
 
         car.color = getColor(max_mat);
         car.center = cv::Point2f(max_rect.x + max_rect.width / 2,
                                  max_rect.y + max_rect.height / 2);
+        // 写入蓝车装甲板中心点
         if (car.color == 0) {
             detect_result.blue_x[car.number - 1] = car.center.x;
             detect_result.blue_y[car.number - 1] = car.center.y;
@@ -293,6 +336,7 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
                             cv::Scalar(255, 255, 255), 2);
             }
         }
+        // 写入红车装甲板中心点
         if (car.color == 2) {
             detect_result.red_x[car.number - 1] = car.center.x;
             detect_result.red_y[car.number - 1] = car.center.y;
@@ -308,14 +352,18 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
                             cv::Scalar(255, 255, 255), 2);
             }
         }
+        // 如果颜色不为红蓝画白框
         if (car.color == 1) {
             if (debug)
                 cv::rectangle(img, car.car_rect, cv::Scalar(255, 255, 255),
                               2);
         }
     }
+    // 填时间戳
     detect_result.header.stamp = msg->header.stamp;
+    // 发布结果
     pub->publish(detect_result);
+    // 统计并打印总耗时
     std::chrono::steady_clock::time_point end =
         std::chrono::steady_clock::now();
     std::chrono::duration<double> time_used =
@@ -323,9 +371,11 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
                                                                   begin);
     std::cout << "Detect Time: " << time_used.count() * 1000 << "ms"
               << std::endl;
+    // 显示调试图像
     cv::Mat final_img;
     cv::resize(img, final_img, cv::Size(1536, 1125));
     cv::imshow("detect", final_img);
+    // 按“r”切换debug模式
     auto key = cv::waitKey(1);
     if (key == 'r') {
         debug = !debug;

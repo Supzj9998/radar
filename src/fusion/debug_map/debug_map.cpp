@@ -16,32 +16,41 @@ public:
     explicit DebugMap(const rclcpp::NodeOptions& options)
         : Node("debug_map", options)
     {
+        // 订阅kalman的结果，进回调
         detect_result_sub =
             this->create_subscription<vision_interface::msg::DetectResult>(
                 "/kalman_detect", 10,
                 std::bind(&DebugMap::callback, this,
                           std::placeholders::_1));
+        // 订阅resolve的结果，进相机回调
         camera_detect_sub =
             this->create_subscription<vision_interface::msg::DetectResult>(
                 "/resolve_result", rclcpp::SensorDataQoS(),
                 std::bind(&DebugMap::camera_callback, this,
                           std::placeholders::_1));
+        // 读取地图图片
         map = cv::imread("config/RM2025.png");
+        // 订阅比赛信息话题，进save_match_info
         match_info_sub =
             this->create_subscription<vision_interface::msg::MatchInfo>(
                 "/match_info", 10,
                 std::bind(&DebugMap::save_match_info, this,
                           std::placeholders::_1));
+        // 订阅预警
         radar_warn_pub =
             this->create_publisher<vision_interface::msg::RadarWarn>(
                 "/hero_state", 10);
+        // 创建map发布者
         debug_map_pub =
             this->create_publisher<sensor_msgs::msg::Image>("/map_2d", 10);
+        // 创建哨兵发布者
         radar2sentry_pub =
             this->create_publisher<vision_interface::msg::Radar2Sentry>(
                 "/Radar2Sentry", rclcpp::SensorDataQoS());
+        // 缩放地图图片
         cv::resize(map, map, cv::Size(28 * 25, 15 * 25));
     }
+    // 保存比赛信息
     void save_match_info(
         const std::shared_ptr<vision_interface::msg::MatchInfo> msg)
     {
@@ -52,27 +61,37 @@ public:
 
     void show_map()
     {
+        // 获取当前时间
         auto   now_time = std::chrono::system_clock::now();
+        // 把当前时间转成一个 double 秒数
         double time = std::chrono::duration_cast<std::chrono::milliseconds>(
                           now_time.time_since_epoch())
                           .count() /
                       1000.0;
+        // 复制地图
         auto clone_map = map.clone();
+        // 循环处理 6 个目标槽位
         for (int i = 0; i < 6; i++) {
+            // 生成显示编号
             int number = i + 1;
             if (number == 6)
                 number++;
+            // 判断是否绘制蓝方目标
             if (blue_point[i].x * blue_point[i].y &&
                 time - blue_update[i] < 0.5) {
+                // 把蓝方地图坐标映射成图像像素坐标
                 cv::Point2f point = cv::Point2f(
                     clone_map.cols * blue_point[i].x / 28,
                     clone_map.rows * (15 - blue_point[i].y) / 15);
+                // 画蓝色圆点
                 cv::circle(clone_map, point, 10, cv::Scalar(200, 0, 0), -1);
+                // 在蓝点上写编号
                 cv::putText(clone_map, std::to_string(number),
                             cv::Point(point.x - 6, point.y + 5),
                             cv::FONT_HERSHEY_SIMPLEX, 0.5,
                             cv::Scalar(255, 255, 255));
             }
+            // 红方部分
             if (red_point[i].x * red_point[i].y &&
                 time - red_update[i] < 0.5) {
                 cv::Point2f point = cv::Point2f(
@@ -91,23 +110,31 @@ public:
     void camera_callback(
         const std::shared_ptr<vision_interface::msg::DetectResult> msg)
     {
+        // 获取当前时间
         auto   now = std::chrono::system_clock::now();
         double time = std::chrono::duration_cast<std::chrono::milliseconds>(
                           now.time_since_epoch())
                           .count() /
                       1000.0;
+        // 遍历六个目标
         for (int i = 0; i < 6; i++) {
+            // 处理蓝方目标
             if (msg->blue_x[i] * msg->blue_y[i]) {
+                // 蓝方目标的时间判断
                 if (time - blue_time[i] > 5) {
+                    // 更新蓝方坐标
                     blue_point[i] =
                         cv::Point2f(msg->blue_x[i], msg->blue_y[i]);
+                    // 根据己方颜色做坐标翻转
                     if (!match_info.self_color) {
                         blue_point[i] = cv::Point2f(28 - msg->blue_x[i],
                                                     15 - msg->blue_y[i]);
                     }
+                    // 记录蓝方更新时间
                     blue_update[i] = time;
                 }
             }
+            // 处理红方目标
             if (msg->red_x[i] * msg->red_y[i]) {
                 if (time - red_time[i] > 5) {
                     red_point[i] =
@@ -120,31 +147,39 @@ public:
                 }
             }
         }
+        // 显示地图
         show_map();
     }
 
     void
     callback(const std::shared_ptr<vision_interface::msg::DetectResult> msg)
     {
+        // 获取当前时间
         auto   now = std::chrono::system_clock::now();
         double time = std::chrono::duration_cast<std::chrono::milliseconds>(
                           now.time_since_epoch())
                           .count() /
                       1000.0;
+        // 遍历六个目标
         for (int i = 0; i < 6; i++) {
+            // 更新蓝色方
             if (msg->blue_x[i] * msg->blue_y[i]) {
                 blue_point[i] = cv::Point2f(msg->blue_x[i], msg->blue_y[i]);
                 blue_time[i] = time;
                 blue_update[i] = time;
             }
+            // 更新红色方
             if (msg->red_x[i] * msg->red_y[i]) {
                 red_point[i] = cv::Point2f(msg->red_x[i], msg->red_y[i]);
                 red_time[i] = time;
                 red_update[i] = time;
             }
         }
+        // 显示地图
         show_map();
+        // 创建预警信息
         vision_interface::msg::RadarWarn radar_warn;
+        // 英雄状态预警
         if (hero_count1 > 10) {
             radar_warn.hero_state = 1;
             radar_warn_pub->publish(radar_warn);
@@ -152,6 +187,7 @@ public:
             radar_warn.hero_state = 2;
             radar_warn_pub->publish(radar_warn);
         }
+        // 判断敌方英雄所在区域
         if (match_info.self_color == 0) {
             if (red_point[0].x > (28 - 8.668)) {
                 hero_count1++;
@@ -181,6 +217,7 @@ public:
             }
         }
 
+        // 发给哨兵的信息
         vision_interface::msg::Radar2Sentry radar2sentry;
         if (match_info.self_color == 0) {
             for (int i = 0; i < 6; i++) {

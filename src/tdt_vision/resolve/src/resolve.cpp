@@ -3,34 +3,33 @@
 #define TDT_INFO(msg) std::cout << msg << std::endl
 
 namespace tdt_radar {
-//调用父类构造函数创建"radar_resolve_node"节点
 Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     : Node("radar_resolve_node", node_options)
 {
     //创建parser_对象
     parser_ = new parser();
-    //读取"config/RM2025.png"加载小地图图像到minimap
+    //读取小地图图像
     minimap = cv::imread("config/RM2025.png");
-    //订阅camera_point2D话题的消息作为callback的第一个参数 用于接收来自摄像头或雷达的单个2D点坐标
+    //订阅camera_point2D
     point_sub = this->create_subscription<geometry_msgs::msg::Vector3>(
         "camera_point2D", rclcpp::SensorDataQoS(),
         std::bind(&Resolve::callback, this, std::placeholders::_1));
-    //发布"camera_point3D"话题 用于把2D坐标变换后的3D点云发出去
+    //发布camera_point3D
     pub = this->create_publisher<sensor_msgs::msg::PointCloud2>(
         "camera_point3D", rclcpp::SensorDataQoS());
-    //订阅"match_info"话题的消息作为MatchInfoCallback的第一个参数 用于接收比赛信息
+    //订阅match_info
     match_info_sub =
         this->create_subscription<vision_interface::msg::MatchInfo>(
             "match_info", rclcpp::SensorDataQoS(),
             std::bind(&Resolve::MatchInfoCallback, this,
                       std::placeholders::_1));
-    //订阅"detect_result"话题作为DetectCallback的第一个参数 用于接收视觉识别模块的结果
+    //订阅detect_result
     detect_sub =
         this->create_subscription<vision_interface::msg::DetectResult>(
             "detect_result", rclcpp::SensorDataQoS(),
             std::bind(&Resolve::DetectCallback, this,
                       std::placeholders::_1));
-    //发布"resolve_result"话题 用于发布雷达/视觉融合之后的最终坐标数据
+    //发布resolve_result
     pub_radar = this->create_publisher<vision_interface::msg::DetectResult>(
         "resolve_result", rclcpp::SensorDataQoS());
     //输出初始化信息

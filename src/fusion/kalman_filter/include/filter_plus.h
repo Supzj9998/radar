@@ -14,10 +14,12 @@ private:
     cv::KalmanFilter KF;
 
 public:
+    // 计算两个二维点之间的欧几里得距离
     float Distance(pcl::PointXY& a, pcl::PointXY& b)
     {
         return sqrt(pow(a.x - b.x, 2) + pow(a.y - b.y, 2));
     }
+    // 从 timer 这个时刻到现在，过去了多少秒
     float get_time()
     {
         auto duration =
@@ -25,6 +27,7 @@ public:
                 std::chrono::steady_clock::now() - timer);
         return duration.count() / 1000.0;
     }
+    //kalman相关容器
     float                                        last_time = 0;
     std::chrono::steady_clock::time_point        timer;
     float                                        delete_time = 2.0;
@@ -88,6 +91,7 @@ public:
 
     ~Kalman_filter_plus() {}
 
+    // 判断当前这个目标更像红车还是蓝车
     int get_color()
     {
         if (detect_history.size() == 0) {
@@ -109,6 +113,7 @@ public:
         }
     }
 
+    // 判断当前这个目标的编号
     int get_number()
     {
         int                color = get_color();
@@ -129,6 +134,7 @@ public:
         return max_number;
     }
 
+    // 更新
     void update(pcl::PointXY& input, rclcpp::Time time)
     {
         cv::Mat meas = cv::Mat::zeros(2, 1, CV_32F);
@@ -147,6 +153,7 @@ public:
         }
     }
 
+    // 预测
     void update_predict_point()
     {
         dt_ = get_time();
@@ -157,6 +164,7 @@ public:
         predict_point.y = result.at<float>(2);
     }
 
+    // 通过距离匹配轨迹与点
     bool match(pcl::PointXY& input)
     {
         if (Distance(predict_point, input) <
@@ -170,27 +178,37 @@ public:
     void camera_match(rclcpp::Time& time, pcl::PointXY& input, int color,
                       int number)
     {
+        // 匹配时间阈值
         const double TIME_THRESHOLD = 1.0f;
         double       input_time = GetTimeByRosTime(time);
+        // 最小时间差
         double       differ_time = 1000;
         pcl::PointXY match_point;
+        // 遍历 history，找时间最近的点
         for (auto& point : history) {
             auto differ = abs(point.first - input_time);
+            // 更新最近点
             if (differ < differ_time) {
                 differ_time = differ;
                 match_point = point.second;
             }
         }
+        // 时间差太大就直接返回
         if (differ_time > TIME_THRESHOLD) {
             return;
         }
+        // 做空间距离判断
         if (Distance(match_point, input) < detect_r) {
+            // 匹配成功后，保存颜色和编号
             detect_history.push_back(std::make_pair(color, number));
+            // 限制 detect_history 长度
             if (detect_history.size() > max_history) {
                 detect_history.erase(detect_history.begin());
             }
         }
     }
+
+    // 把 ROS 时间对象转换成 double 类型的秒数。
     static double GetTimeByRosTime(rclcpp::Time& ros_time)
     {
         double ros_time_value = ros_time.nanoseconds() / 1e9;

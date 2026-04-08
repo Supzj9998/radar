@@ -20,11 +20,11 @@ namespace tdt_radar {
 //创建节点类Resolve final表示此类不能再被继承
 class Resolve final : public rclcpp::Node {
 public:
-    //构造函数 初始化节点
+    //构造函数
     explicit Resolve(const rclcpp::NodeOptions& options);
-    //将收到的二维坐标转换为地图坐标并发布成点云
+    //主回调
     void callback(const std::shared_ptr<geometry_msgs::msg::Vector3> msg);
-    //处理视觉识别模块的检测结果 把视觉检测到的“蓝方”和“红方”坐标转换到地图坐标，并绘制在小地图上，同时生成点云并发布
+    //处理视觉识别模块的检测结果
     void DetectCallback(
         const vision_interface::msg::DetectResult::SharedPtr msg);
     //回调函数处理比赛信息
@@ -54,9 +54,8 @@ public:
 
 private:
     //声明发布者
-    //发布雷达点云信息
+    //发布点云信息
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub;
-    //发布雷达融合后的检测结果，给其他模块
     rclcpp::Publisher<vision_interface::msg::DetectResult>::SharedPtr
         pub_radar;
 };
