@@ -36,7 +36,8 @@ public:
     cv::Point3f self_Tower = cv::Point3f(10.936, -11.161, 0.868);
     cv::Point3f enemy_Base = cv::Point3f(25.49, -7.5, 1.24524);
     cv::Point3f enemy_Tower = cv::Point3f(16.925, -3.625, 1.745);
-    cv::Point3f enemy_High = cv::Point3f(20.20, -10.8, 0.8);
+    // cv::Point3f enemy_High = cv::Point3f(20.20, -10.8, 0.8);
+    cv::Point3f enemy_High = cv::Point3f(16.925, -3.625, 0.868);
 
     explicit Calibrate(const rclcpp::NodeOptions& options);
     void callback(const sensor_msgs::msg::Image::SharedPtr msg);

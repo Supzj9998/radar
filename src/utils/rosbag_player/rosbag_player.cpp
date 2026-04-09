@@ -1,3 +1,5 @@
+#include <filesystem>
+#include <stdexcept>
 #include <thread>
 #include <cv_bridge/cv_bridge.hpp>
 #include <opencv2/opencv.hpp>
@@ -6,6 +8,7 @@
 #include <rosbag2_cpp/reader.hpp>
 #include <rosbag2_cpp/readers/sequential_reader.hpp>
 #include <rosbag2_storage/serialized_bag_message.hpp>
+#include <rosbag2_storage/storage_options.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/detail/image__struct.hpp>
 #include <sensor_msgs/msg/image.hpp>
@@ -13,13 +16,6 @@
 #include <vision_interface/msg/match_info.hpp>
 
 using namespace std::chrono_literals;
-
-void on_exit([[maybe_unused]] int sig)
-{
-    RCUTILS_LOG_INFO("Exit by Ctrl+C");
-    rclcpp::shutdown();
-    exit(0);
-}
 
 class RosbagPlayer : public rclcpp::Node {
 public:
@@ -37,8 +33,7 @@ public:
         match_info_publisher_ =
             this->create_publisher<vision_interface::msg::MatchInfo>(
                 "/match_info", 10);
-        signal(SIGINT, on_exit);
-        reader_.open(rosbag_file);
+        open_bag();
 
         processing_thread_ =
             std::make_shared<std::thread>(&RosbagPlayer::play_bag, this);
@@ -52,11 +47,59 @@ public:
     }
 
 private:
+    void open_bag()
+    {
+        namespace fs = std::filesystem;
+
+        if (rosbag_file.empty()) {
+            throw std::invalid_argument("Parameter 'rosbag_file' is empty.");
+        }
+
+        const fs::path bag_path(rosbag_file);
+        if (!fs::exists(bag_path)) {
+            throw std::invalid_argument(
+                "Rosbag path does not exist: " + rosbag_file);
+        }
+
+        rosbag2_storage::StorageOptions storage_options;
+        storage_options.uri = rosbag_file;
+
+        if (fs::is_regular_file(bag_path)) {
+            const auto extension = bag_path.extension().string();
+            if (extension == ".db3") {
+                storage_options.storage_id = "sqlite3";
+            }
+            else if (extension == ".mcap") {
+                storage_options.storage_id = "mcap";
+            }
+            else {
+                throw std::invalid_argument(
+                    "Unsupported rosbag file extension for path: " +
+                    rosbag_file);
+            }
+        }
+        else if (!fs::is_directory(bag_path)) {
+            throw std::invalid_argument(
+                "Rosbag path must be a directory, .db3 file, or .mcap file: " +
+                rosbag_file);
+        }
+
+        try {
+            reader_.open(storage_options);
+            RCLCPP_INFO(this->get_logger(), "Opened rosbag: %s",
+                        rosbag_file.c_str());
+        }
+        catch (const std::exception& e) {
+            throw std::runtime_error(
+                "Failed to open rosbag '" + rosbag_file + "': " + e.what());
+        }
+    }
+
     void play_bag()
     {
         while (rclcpp::ok()) {
             if (!reader_.has_next())
-                reader_.open(rosbag_file);
+                open_bag();
 
             auto start_time = std::chrono::high_resolution_clock::now();
             auto bag_message = reader_.read_next();

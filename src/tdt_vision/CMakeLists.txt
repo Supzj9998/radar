@@ -15,15 +15,20 @@ include_directories(
 find_package(ament_cmake_auto REQUIRED)
 ament_auto_find_build_dependencies()
 
-
 option(CUDA_USE_STATIC_CUDA_RUNTIME OFF)
 set(CMAKE_BUILD_TYPE Debug)
-set(CMAKE_CUDA_COMPILER /usr/local/cuda/bin/nvcc)
-include_directories(/usr/local/cuda/include)
-link_directories(/usr/local/cuda/lib64)
 
-find_package(ament_cmake_auto REQUIRED)
-ament_auto_find_build_dependencies()
+if(NOT DEFINED CMAKE_CUDA_COMPILER AND EXISTS "/usr/bin/nvcc")
+  set(CMAKE_CUDA_COMPILER "/usr/bin/nvcc")
+endif()
+
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR "${CMAKE_CUDA_ARCHITECTURES}" STREQUAL "")
+  if(DEFINED ENV{CUDAARCHS} AND NOT "$ENV{CUDAARCHS}" STREQUAL "")
+    set(CMAKE_CUDA_ARCHITECTURES "$ENV{CUDAARCHS}" CACHE STRING "CUDA architectures" FORCE)
+  else()
+    set(CMAKE_CUDA_ARCHITECTURES 75 CACHE STRING "CUDA architectures" FORCE)
+  endif()
+endif()
 
 add_subdirectory(utils)
 include_directories(${PROJECT_SOURCE_DIR}/utils/include)
@@ -33,12 +38,12 @@ file(GLOB_RECURSE RADAR_DETECT_SRCS "detect/src/*.cpp")
 ament_auto_add_library(${RADAR_DETECT} SHARED
     ${RADAR_DETECT_SRCS}
 )
-find_package(CUDA)
+find_package(CUDAToolkit REQUIRED)
 include(${PROJECT_SOURCE_DIR}/cmake/modules/libnvinferConfig.cmake)
-message("Using Cuda Version: ${CUDA_VERSION} and TensorRT Version: ${nvinfer_VERSION}")
+message("Using CUDA toolkit from: ${CUDAToolkit_BIN_DIR}, TensorRT Version: ${nvinfer_VERSION}")
 add_definitions(-D use_tensorrt)
 enable_language(CUDA)
-include_directories(${CUDA_INCLUDE_DIRS})
+include_directories(${CUDAToolkit_INCLUDE_DIRS})
 include_directories(${nvinfer_INCLUDE_DIRS})
 
 add_subdirectory(infer)
@@ -48,7 +53,7 @@ target_link_libraries(${RADAR_DETECT}
     utils
     infer 
     ${nvinfer_LIBRARY} 
-    cudart 
+    CUDA::cudart
     nvonnxparser 
     fmt 
     ${PCL_LIBRARIES}

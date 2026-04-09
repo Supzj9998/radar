@@ -11,6 +11,13 @@ namespace tdt_radar {
 // 图片数量
 unsigned int count_img = 0;
 
+bool isNonEmptyFile(const std::string& path)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    return fs::is_regular_file(path, ec) && fs::file_size(path, ec) > 0;
+}
+
 // 判断颜色
 int getColor(cv::Mat& img)
 {
@@ -88,8 +95,7 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     fs.release();
 
     // 检查 yolo engine
-    std::ifstream file1(yolo_path.c_str());
-    if (!file1.good()) {
+    if (!isNonEmptyFile(yolo_path)) {
         system("python3 src/utils/onnx2trt.py "
                "--onnx=model/ONNX/RM2025.onnx "
                "--saveEngine=model/TensorRT/yolo.engine "
@@ -102,8 +108,7 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
         TDT_INFO("Load yolo engine!");
     }
     // 检查 armor_yolo engine
-    std::ifstream file2(armor_path.c_str());
-    if (!file2.good()) {
+    if (!isNonEmptyFile(armor_path)) {
         system("python3 src/utils/onnx2trt.py "
                "--onnx=model/ONNX/armor_yolo.onnx "
                "--saveEngine=model/TensorRT/armor_yolo.engine "
@@ -116,8 +121,7 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
         TDT_INFO("Load armor_yolo engine!");
     }
     // 检查 classify engine
-    std::ifstream file3(classify_path.c_str());
-    if (!file3.good()) {
+    if (!isNonEmptyFile(classify_path)) {
         system("python3 src/utils/onnx2trt.py "
                "--onnx=model/ONNX/classify.onnx "
                "--saveEngine=model/TensorRT/classify.engine "
@@ -137,13 +141,24 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     // 加载分类器
     this->classifier =
         classify::load(classify_path, classify::Type::densenet121);
+    if (!this->classifier) {
+        throw std::runtime_error("Failed to load classify engine: " +
+                                 classify_path);
+    }
     TDT_INFO("Load classify engine success!");
 
     // 加载装甲板检测模型
     this->armor_yolo = yolo::load(armor_path, yolo::Type::V8, 0.4f, 0.45f);
+    if (!this->armor_yolo) {
+        throw std::runtime_error("Failed to load armor yolo engine: " +
+                                 armor_path);
+    }
     TDT_INFO("Load armor_yolo engine success!");
     // 加载装甲板检测模型
     this->yolo = yolo::load(yolo_path, yolo::Type::V8, 0.65f, 0.45f);
+    if (!this->yolo) {
+        throw std::runtime_error("Failed to load yolo engine: " + yolo_path);
+    }
     TDT_INFO("Load yolo engine success!");
     // 创建图像订阅者，调用回调
     image_sub = this->create_subscription<sensor_msgs::msg::Image>(
@@ -157,6 +172,11 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
 
 void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
 {
+    if (!yolo || !armor_yolo || !classifier) {
+        RCLCPP_ERROR(this->get_logger(),
+                     "Inference engines are not initialized.");
+        return;
+    }
     // 记录开始时间
     std::chrono::steady_clock::time_point begin =
         std::chrono::steady_clock::now();

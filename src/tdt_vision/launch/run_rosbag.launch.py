@@ -9,12 +9,14 @@ from launch_ros.descriptions import ComposableNode
 from launch_ros.actions import ComposableNodeContainer, Node
 from launch.actions import Shutdown
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
+    rosbag_file = LaunchConfiguration("rosbag_file")
 
 
     def get_rosbag_player_node(package, plugin):
@@ -24,8 +26,7 @@ def generate_launch_description():
             name="rosbag_player_node",
             parameters=[
                 {
-                    "rosbag_file":
-                    "/home/supzj/rm/radartest/rosbag.db3"
+                    "rosbag_file": rosbag_file
                 }
             ],
             extra_arguments=[{"use_intra_process_comms": True}],
@@ -101,4 +102,14 @@ def generate_launch_description():
             ]
         ),
     )
-    return LaunchDescription([cam_detector, plugin_map_launch_cmd])
+    return LaunchDescription(
+        [
+            DeclareLaunchArgument(
+                "rosbag_file",
+                default_value="/home/supzj/RM/rosbag.db3",
+                description="Path to a rosbag directory, .db3 file, or .mcap file.",
+            ),
+            cam_detector,
+            plugin_map_launch_cmd,
+        ]
+    )

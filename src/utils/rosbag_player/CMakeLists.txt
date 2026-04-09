@@ -5,8 +5,8 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# 设置 C++ 标准为 C++14，并要求项目必须使用该标准
-set(CMAKE_CXX_STANDARD 14)
+# 设置 C++ 标准为 C++17，并要求项目必须使用该标准
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON) # 要求项目必须使用设置的 C++ 标准，如果编译器不支持该标准，CMake 会报错
 
 # 禁用编译器特定的 C++ 语言扩展
