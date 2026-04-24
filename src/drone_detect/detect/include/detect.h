@@ -22,6 +22,13 @@ struct Detection {
   float score;
 };
 
+struct OutputBinding {
+  std::string name;
+  void* device_buffer{nullptr};
+  mutable void* host_buffer{nullptr};
+  std::size_t buffer_bytes{0};
+};
+
 struct TrtDestroy {
   template <typename T>
   void operator()(T* ptr) const {
@@ -45,6 +52,7 @@ class DetectNode : public rclcpp::Node {
   std::vector<Detection> decodeYoloOutput(const std::vector<float>& data,
                                           const std::vector<int64_t>& shape,
                                           const cv::Size& image_size) const;
+  std::vector<Detection> applyGlobalNms(const std::vector<Detection>& detections) const;
   sensor_msgs::msg::Image::SharedPtr makeImageMsg(const cv::Mat& image,
                                                   const std_msgs::msg::Header& header) const;
   void drawDetections(cv::Mat& image, const std::vector<Detection>& detections) const;
@@ -58,11 +66,9 @@ class DetectNode : public rclcpp::Node {
   std::unique_ptr<nvinfer1::ICudaEngine, TrtDestroy> engine_;
   std::unique_ptr<nvinfer1::IExecutionContext, TrtDestroy> context_;
   void* input_buffer_device_{nullptr};
-  void* output_buffer_device_{nullptr};
   mutable void* input_buffer_host_{nullptr};
-  mutable void* output_buffer_host_{nullptr};
   std::size_t input_buffer_bytes_{0};
-  std::size_t output_buffer_bytes_{0};
+  std::vector<OutputBinding> output_bindings_;
   void* cuda_stream_{nullptr};
   bool model_ready_{false};
 
@@ -72,7 +78,6 @@ class DetectNode : public rclcpp::Node {
   std::string model_path_;
   std::string engine_path_;
   std::string input_tensor_name_{"images"};
-  std::string output_tensor_name_;
   int input_width_{640};
   int input_height_{640};
   float conf_threshold_{0.25F};

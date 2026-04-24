@@ -112,17 +112,19 @@ DetectNode::~DetectNode() {
     cudaFree(input_buffer_device_);
     input_buffer_device_ = nullptr;
   }
-  if (output_buffer_device_ != nullptr) {
-    cudaFree(output_buffer_device_);
-    output_buffer_device_ = nullptr;
-  }
   if (input_buffer_host_ != nullptr) {
     cudaFreeHost(input_buffer_host_);
     input_buffer_host_ = nullptr;
   }
-  if (output_buffer_host_ != nullptr) {
-    cudaFreeHost(output_buffer_host_);
-    output_buffer_host_ = nullptr;
+  for (auto& binding : output_bindings_) {
+    if (binding.device_buffer != nullptr) {
+      cudaFree(binding.device_buffer);
+      binding.device_buffer = nullptr;
+    }
+    if (binding.host_buffer != nullptr) {
+      cudaFreeHost(binding.host_buffer);
+      binding.host_buffer = nullptr;
+    }
   }
   if (debug_window_created_) {
     cv::destroyWindow(debug_window_name_);
@@ -205,14 +207,14 @@ bool DetectNode::loadEngine() {
   cuda_stream_ = stream;
 
   const int tensor_count = engine_->getNbIOTensors();
+  output_bindings_.clear();
   for (int i = 0; i < tensor_count; ++i) {
     const char* tensor_name = engine_->getIOTensorName(i);
     if (engine_->getTensorIOMode(tensor_name) == nvinfer1::TensorIOMode::kOUTPUT) {
-      output_tensor_name_ = tensor_name;
-      break;
+      output_bindings_.push_back(OutputBinding{tensor_name});
     }
   }
-  if (output_tensor_name_.empty()) {
+  if (output_bindings_.empty()) {
     return false;
   }
 
@@ -222,15 +224,19 @@ bool DetectNode::loadEngine() {
   }
 
   const auto input_dims = context_->getTensorShape(input_tensor_name_.c_str());
-  const auto output_dims = context_->getTensorShape(output_tensor_name_.c_str());
   input_buffer_bytes_ = volume(input_dims) * sizeof(float);
-  output_buffer_bytes_ = volume(output_dims) * sizeof(float);
-
   if (cudaMalloc(&input_buffer_device_, input_buffer_bytes_) != cudaSuccess ||
-      cudaMalloc(&output_buffer_device_, output_buffer_bytes_) != cudaSuccess ||
-      cudaMallocHost(&input_buffer_host_, input_buffer_bytes_) != cudaSuccess ||
-      cudaMallocHost(&output_buffer_host_, output_buffer_bytes_) != cudaSuccess) {
+      cudaMallocHost(&input_buffer_host_, input_buffer_bytes_) != cudaSuccess) {
     return false;
+  }
+
+  for (auto& binding : output_bindings_) {
+    const auto output_dims = context_->getTensorShape(binding.name.c_str());
+    binding.buffer_bytes = volume(output_dims) * sizeof(float);
+    if (cudaMalloc(&binding.device_buffer, binding.buffer_bytes) != cudaSuccess ||
+        cudaMallocHost(&binding.host_buffer, binding.buffer_bytes) != cudaSuccess) {
+      return false;
+    }
   }
 
   return true;
@@ -298,28 +304,40 @@ std::vector<Detection> DetectNode::infer(const cv::Mat& image) const {
     throw std::runtime_error("Failed to copy input to device.");
   }
 
-  if (!context_->setTensorAddress(input_tensor_name_.c_str(), input_buffer_device_) ||
-      !context_->setTensorAddress(output_tensor_name_.c_str(), output_buffer_device_)) {
+  if (!context_->setTensorAddress(input_tensor_name_.c_str(), input_buffer_device_)) {
     throw std::runtime_error("Failed to bind TensorRT tensor addresses.");
+  }
+  for (const auto& binding : output_bindings_) {
+    if (!context_->setTensorAddress(binding.name.c_str(), binding.device_buffer)) {
+      throw std::runtime_error("Failed to bind TensorRT output tensor addresses.");
+    }
   }
 
   if (!context_->enqueueV3(stream)) {
     throw std::runtime_error("TensorRT enqueueV3 failed.");
   }
 
-  if (cudaMemcpyAsync(output_buffer_host_, output_buffer_device_, output_buffer_bytes_,
-                      cudaMemcpyDeviceToHost, stream) != cudaSuccess) {
-    throw std::runtime_error("Failed to copy output to host.");
+  for (const auto& binding : output_bindings_) {
+    if (cudaMemcpyAsync(binding.host_buffer, binding.device_buffer, binding.buffer_bytes,
+                        cudaMemcpyDeviceToHost, stream) != cudaSuccess) {
+      throw std::runtime_error("Failed to copy output to host.");
+    }
   }
   if (cudaStreamSynchronize(stream) != cudaSuccess) {
     throw std::runtime_error("Failed to synchronize CUDA stream.");
   }
 
-  const auto output_dims = context_->getTensorShape(output_tensor_name_.c_str());
-  const auto output_shape = dimsToVector(output_dims);
-  const auto* output_data = static_cast<const float*>(output_buffer_host_);
-  std::vector<float> output(output_data, output_data + volume(output_dims));
-  return decodeYoloOutput(output, output_shape, image.size());
+  std::vector<Detection> detections;
+  for (const auto& binding : output_bindings_) {
+    const auto output_dims = context_->getTensorShape(binding.name.c_str());
+    const auto output_shape = dimsToVector(output_dims);
+    const auto* output_data = static_cast<const float*>(binding.host_buffer);
+    std::vector<float> output(output_data, output_data + volume(output_dims));
+    auto partial = decodeYoloOutput(output, output_shape, image.size());
+    detections.insert(detections.end(), partial.begin(), partial.end());
+  }
+
+  return applyGlobalNms(detections);
 }
 
 cv::Mat DetectNode::preprocess(const cv::Mat& image) const {
@@ -338,7 +356,14 @@ std::vector<Detection> DetectNode::decodeYoloOutput(const std::vector<float>& da
 
   int64_t num_preds = 0;
   int64_t attrs = 0;
-  enum class TensorLayout { kPredsAttrs, kAttrsPreds, kOnePredsAttrs, kAttrsPredsOne };
+  enum class TensorLayout {
+    kPredsAttrs,
+    kAttrsPreds,
+    kOnePredsAttrs,
+    kAttrsPredsOne,
+    kAttrsHW,
+    kHWAttrs
+  };
   TensorLayout layout = TensorLayout::kPredsAttrs;
 
   if (shape.size() == 2) {
@@ -360,7 +385,15 @@ std::vector<Detection> DetectNode::decodeYoloOutput(const std::vector<float>& da
     if (shape[0] != 1) {
       return {};
     }
-    if (shape[1] == 1) {
+    if (shape[1] > 1 && shape[1] <= 256 && shape[2] > 1 && shape[3] > 1) {
+      attrs = shape[1];
+      num_preds = shape[2] * shape[3];
+      layout = TensorLayout::kAttrsHW;
+    } else if (shape[3] > 1 && shape[3] <= 256 && shape[1] > 1 && shape[2] > 1) {
+      attrs = shape[3];
+      num_preds = shape[1] * shape[2];
+      layout = TensorLayout::kHWAttrs;
+    } else if (shape[1] == 1) {
       num_preds = shape[2];
       attrs = shape[3];
       layout = TensorLayout::kOnePredsAttrs;
@@ -389,6 +422,10 @@ std::vector<Detection> DetectNode::decodeYoloOutput(const std::vector<float>& da
         return data[static_cast<std::size_t>(pred_idx * attrs + attr_idx)];
       case TensorLayout::kAttrsPredsOne:
         return data[static_cast<std::size_t>(attr_idx * num_preds + pred_idx)];
+      case TensorLayout::kAttrsHW:
+        return data[static_cast<std::size_t>(attr_idx * num_preds + pred_idx)];
+      case TensorLayout::kHWAttrs:
+        return data[static_cast<std::size_t>(pred_idx * attrs + attr_idx)];
     }
     return 0.0F;
   };
@@ -459,6 +496,31 @@ std::vector<Detection> DetectNode::decodeYoloOutput(const std::vector<float>& da
     detections.push_back(Detection{boxes[idx], class_ids[idx], confidences[idx]});
   }
   return detections;
+}
+
+std::vector<Detection> DetectNode::applyGlobalNms(const std::vector<Detection>& detections) const {
+  if (detections.empty()) {
+    return {};
+  }
+
+  std::vector<cv::Rect> boxes;
+  std::vector<float> confidences;
+  boxes.reserve(detections.size());
+  confidences.reserve(detections.size());
+  for (const auto& det : detections) {
+    boxes.push_back(det.box);
+    confidences.push_back(det.score);
+  }
+
+  std::vector<int> keep_indices;
+  cv::dnn::NMSBoxes(boxes, confidences, conf_threshold_, nms_threshold_, keep_indices);
+
+  std::vector<Detection> kept;
+  kept.reserve(keep_indices.size());
+  for (const int idx : keep_indices) {
+    kept.push_back(detections[static_cast<std::size_t>(idx)]);
+  }
+  return kept;
 }
 
 sensor_msgs::msg::Image::SharedPtr DetectNode::makeImageMsg(const cv::Mat& image,
