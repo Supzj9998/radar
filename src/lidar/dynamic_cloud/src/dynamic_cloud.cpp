@@ -319,7 +319,7 @@ void DynamicCloud::callback(
     // 如果在飞镖检测区域里累计到的点数超过 5 个，就认为“检测到了飞镖相关目标”，然后输出警告日志  lidar_detect.dart_state = 1
     if (dart_cloud.size() > 5) {
         RCLCPP_WARN(rclcpp::get_logger("rclcpp"), "Find dart cloud!");
-        RCLCPP_WARN(rclcpp::get_logger("rclcpp"), "Dart cloud size: %d",
+        RCLCPP_WARN(rclcpp::get_logger("rclcpp"), "Dart cloud size: %zu",
                     dart_cloud.size());
         lidar_detect.dart_state = 1;
     }

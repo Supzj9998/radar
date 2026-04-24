@@ -106,7 +106,7 @@ def generate_launch_description():
         [
             DeclareLaunchArgument(
                 "rosbag_file",
-                default_value="/home/supzj/RM/rosbag.db3",
+                default_value="/home/radar/01_RADAR/rosbag/rosbag.db3",
                 description="Path to a rosbag directory, .db3 file, or .mcap file.",
             ),
             cam_detector,

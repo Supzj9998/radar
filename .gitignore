@@ -1,11 +1,39 @@
+# ROS 2 / colcon
 build/
-log/
 install/
+log/
+
+# Editor / local workspace
 .cache/
 .vscode/
+.idea/
+*.swp
+*.swo
+*~
 
-config/merged_bag/*
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 
-*.engine
+# Runtime / debug output
+*.log
+*.tmp
+*.bak
+*.out
 
+# ROS bag / merged data
 ros2bags/
+config/merged_bag/
+
+# ML / deployment artifacts
+*.engine
+*.pt
+*.pth
+*.onnx
+*.ckpt
+
+# Common local model export directories
+model/ONNX/
+model/TensorRT/

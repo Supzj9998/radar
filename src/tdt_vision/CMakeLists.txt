@@ -1,5 +1,20 @@
 cmake_minimum_required(VERSION 3.8)
 project(tdt_vision)
+set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS 1)
+if(POLICY CMP0144)
+  cmake_policy(SET CMP0144 NEW)
+endif()
+set(CMAKE_POLICY_DEFAULT_CMP0144 NEW)
+if(POLICY CMP0074)
+  cmake_policy(SET CMP0074 NEW)
+endif()
+set(CMAKE_POLICY_DEFAULT_CMP0074 NEW)
+set(ENV{FLANN_ROOT} "")
+set(ENV{PCL_ROOT} "")
+unset(FLANN_ROOT)
+unset(FLANN_ROOT CACHE)
+unset(PCL_ROOT)
+unset(PCL_ROOT CACHE)
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 20)
@@ -86,6 +101,7 @@ rclcpp_components_register_node(${RADAR_CALIBRATE}
 
 
 ament_auto_package(
+    USE_SCOPED_HEADER_INSTALL_DIR
     INSTALL_TO_SHARE
     launch
 )
