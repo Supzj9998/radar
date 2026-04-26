@@ -22,13 +22,13 @@
 #include "rclcpp_components/register_node_macro.hpp"
 #include "sensor_msgs/image_encodings.hpp"
 
-// Debug window switch:
-// Uncomment the line below to enable OpenCV debug window for YOLO boxes.
+// 调试窗口开关：注释掉该宏即可关闭 OpenCV 可视化窗口，适合无显示环境部署。
 #define DRONE_DETECT_ENABLE_DEBUG_WINDOW
 
 namespace drone::detect {
 namespace {
 
+// TensorRT 日志只输出 ERROR 及以上，避免每帧推理时刷屏。
 class TrtLogger : public nvinfer1::ILogger {
  public:
   void log(Severity severity, const char* msg) noexcept override {
@@ -40,6 +40,7 @@ class TrtLogger : public nvinfer1::ILogger {
 
 TrtLogger g_trt_logger;
 
+// 计算 TensorRT Dims 中所有维度的乘积，用于推导张量元素数量。
 std::size_t volume(const nvinfer1::Dims& dims) {
   std::size_t total = 1;
   for (int i = 0; i < dims.nbDims; ++i) {
@@ -48,6 +49,7 @@ std::size_t volume(const nvinfer1::Dims& dims) {
   return total;
 }
 
+// 将 TensorRT Dims 转成普通 vector，便于后续按 YOLO 常见布局解析。
 std::vector<int64_t> dimsToVector(const nvinfer1::Dims& dims) {
   std::vector<int64_t> out;
   out.reserve(static_cast<std::size_t>(dims.nbDims));
@@ -60,6 +62,7 @@ std::vector<int64_t> dimsToVector(const nvinfer1::Dims& dims) {
 }  // namespace
 
 DetectNode::DetectNode(const rclcpp::NodeOptions& options) : Node("detect_node", options) {
+  // 所有参数都提供默认值，launch 文件可以覆盖模型路径、话题名和阈值。
   image_topic_ = this->declare_parameter<std::string>("image_topic", "image_raw");
   output_image_topic_ =
       this->declare_parameter<std::string>("output_image_topic", "detect/image_with_boxes");
@@ -78,6 +81,7 @@ DetectNode::DetectNode(const rclcpp::NodeOptions& options) : Node("detect_node",
   image_pub_ = this->create_publisher<sensor_msgs::msg::Image>(output_image_topic_, 10);
   boxes_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>(output_boxes_topic_, 10);
 
+  // 图像使用 SensorDataQoS，降低实时图像流在队列中堆积的概率。
   image_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
       image_topic_, rclcpp::SensorDataQoS(),
       std::bind(&DetectNode::imageCallback, this, std::placeholders::_1));
@@ -104,6 +108,7 @@ DetectNode::DetectNode(const rclcpp::NodeOptions& options) : Node("detect_node",
 }
 
 DetectNode::~DetectNode() {
+  // 释放顺序保持 CUDA 流、输入缓冲、输出缓冲、窗口资源逐项清理。
   if (cuda_stream_ != nullptr) {
     cudaStreamDestroy(static_cast<cudaStream_t>(cuda_stream_));
     cuda_stream_ = nullptr;
@@ -134,6 +139,7 @@ DetectNode::~DetectNode() {
 
 bool DetectNode::ensureEngineAvailable() {
   const std::filesystem::path engine_file_path(engine_path_);
+  // engine 输出目录不存在时自动创建，方便首次部署直接由 ONNX 构建。
   if (engine_file_path.has_parent_path()) {
     std::error_code ec;
     std::filesystem::create_directories(engine_file_path.parent_path(), ec);
@@ -147,6 +153,7 @@ bool DetectNode::ensureEngineAvailable() {
   }
 
   const std::string shape = std::to_string(input_height_) + "x" + std::to_string(input_width_);
+  // 先按固定 batch=1 的动态 shape 构建；如果模型不接受 shape 参数，再回退到静态构建。
   const std::string dynamic_command =
       "/usr/src/tensorrt/bin/trtexec --onnx=" + model_path_ + " --saveEngine=" + engine_path_ +
       " --minShapes=" + input_tensor_name_ + ":1x3x" + shape + " --optShapes=" +
@@ -176,6 +183,7 @@ bool DetectNode::ensureEngineAvailable() {
 }
 
 bool DetectNode::loadEngine() {
+  // TensorRT engine 是二进制序列化文件，需要完整读入内存后反序列化。
   std::ifstream file(engine_path_, std::ios::binary);
   if (!file) {
     return false;
@@ -206,6 +214,7 @@ bool DetectNode::loadEngine() {
   }
   cuda_stream_ = stream;
 
+  // 自动枚举所有输出张量，避免强依赖具体 YOLO 导出时的输出名称。
   const int tensor_count = engine_->getNbIOTensors();
   output_bindings_.clear();
   for (int i = 0; i < tensor_count; ++i) {
@@ -223,6 +232,7 @@ bool DetectNode::loadEngine() {
     return false;
   }
 
+  // 输入输出缓冲区在 load 阶段一次性分配，推理时只复用内存减少实时开销。
   const auto input_dims = context_->getTensorShape(input_tensor_name_.c_str());
   input_buffer_bytes_ = volume(input_dims) * sizeof(float);
   if (cudaMalloc(&input_buffer_device_, input_buffer_bytes_) != cudaSuccess ||
@@ -255,6 +265,7 @@ void DetectNode::imageCallback(const sensor_msgs::msg::Image::ConstSharedPtr& ms
   cv::Mat annotated = cv_ptr->image.clone();
   std::vector<Detection> detections;
 
+  // 推理异常通常说明 engine、CUDA 或输入 shape 有问题，置为不可用以避免持续报错。
   if (model_ready_) {
     try {
       detections = infer(cv_ptr->image);
@@ -265,6 +276,8 @@ void DetectNode::imageCallback(const sensor_msgs::msg::Image::ConstSharedPtr& ms
     }
   }
 
+  // 发布给 PnP 的格式为每个目标 10 个 float:
+  // class_id, score, x1, y1, x2, y2, x3, y3, x4, y4。
   std_msgs::msg::Float32MultiArray boxes_msg;
   boxes_msg.data.reserve(detections.size() * 10U);
   for (const auto& det : detections) {
@@ -294,11 +307,13 @@ void DetectNode::imageCallback(const sensor_msgs::msg::Image::ConstSharedPtr& ms
 }
 
 std::vector<Detection> DetectNode::infer(const cv::Mat& image) const {
+  // blobFromImage 输出 NCHW float blob，与 TensorRT 输入 shape 保持一致。
   cv::Mat blob = preprocess(image);
   const std::size_t tensor_size = static_cast<std::size_t>(blob.total()) * sizeof(float);
   std::memcpy(input_buffer_host_, blob.ptr<float>(), tensor_size);
 
   auto stream = static_cast<cudaStream_t>(cuda_stream_);
+  // H2D、推理、D2H 共用同一 CUDA stream，最后同步保证 host 端输出可读。
   if (cudaMemcpyAsync(input_buffer_device_, input_buffer_host_, input_buffer_bytes_,
                       cudaMemcpyHostToDevice, stream) != cudaSuccess) {
     throw std::runtime_error("Failed to copy input to device.");
@@ -307,6 +322,7 @@ std::vector<Detection> DetectNode::infer(const cv::Mat& image) const {
   if (!context_->setTensorAddress(input_tensor_name_.c_str(), input_buffer_device_)) {
     throw std::runtime_error("Failed to bind TensorRT tensor addresses.");
   }
+  // TensorRT 10 的 enqueueV3 需要显式绑定每个输入/输出张量地址。
   for (const auto& binding : output_bindings_) {
     if (!context_->setTensorAddress(binding.name.c_str(), binding.device_buffer)) {
       throw std::runtime_error("Failed to bind TensorRT output tensor addresses.");
@@ -329,6 +345,7 @@ std::vector<Detection> DetectNode::infer(const cv::Mat& image) const {
 
   std::vector<Detection> detections;
   for (const auto& binding : output_bindings_) {
+    // 每个输出张量先独立解码，最后统一 NMS。
     const auto output_dims = context_->getTensorShape(binding.name.c_str());
     const auto output_shape = dimsToVector(output_dims);
     const auto* output_data = static_cast<const float*>(binding.host_buffer);
@@ -342,6 +359,7 @@ std::vector<Detection> DetectNode::infer(const cv::Mat& image) const {
 
 cv::Mat DetectNode::preprocess(const cv::Mat& image) const {
   cv::Mat blob;
+  // swapRB=true 将 OpenCV BGR 转为常见 YOLO 训练使用的 RGB，并归一化到 [0,1]。
   cv::dnn::blobFromImage(image, blob, 1.0 / 255.0, cv::Size(input_width_, input_height_),
                          cv::Scalar(), true, false);
   return blob;
@@ -356,6 +374,7 @@ std::vector<Detection> DetectNode::decodeYoloOutput(const std::vector<float>& da
 
   int64_t num_preds = 0;
   int64_t attrs = 0;
+  // 不同 YOLO 导出路径可能给出 [N, attrs]、[attrs, N] 或带 batch/HW 的输出。
   enum class TensorLayout {
     kPredsAttrs,
     kAttrsPreds,
@@ -412,6 +431,7 @@ std::vector<Detection> DetectNode::decodeYoloOutput(const std::vector<float>& da
     return {};
   }
 
+  // 统一访问不同布局中的第 pred_idx 个预测、第 attr_idx 个属性。
   auto value_at = [&](int64_t pred_idx, int64_t attr_idx) -> float {
     switch (layout) {
       case TensorLayout::kPredsAttrs:
@@ -441,6 +461,7 @@ std::vector<Detection> DetectNode::decodeYoloOutput(const std::vector<float>& da
   const float scale_y = static_cast<float>(image_size.height) / static_cast<float>(input_height_);
 
   for (int64_t i = 0; i < num_preds; ++i) {
+    // 默认 YOLO 输出前四项为中心点 cx/cy 与宽高 w/h，坐标相对于网络输入尺寸。
     const float cx = value_at(i, 0);
     const float cy = value_at(i, 1);
     const float w = value_at(i, 2);
@@ -452,6 +473,7 @@ std::vector<Detection> DetectNode::decodeYoloOutput(const std::vector<float>& da
     if (attrs == 5) {
       confidence = value_at(i, 4);
     } else {
+      // 部分模型输出 objectness * class_score，部分模型没有 objectness，需要参数控制。
       const float objectness = yolo_has_objectness_ ? value_at(i, 4) : 1.0F;
       const int cls_start = yolo_has_objectness_ ? 5 : 4;
       if (cls_start >= attrs) {
@@ -472,6 +494,7 @@ std::vector<Detection> DetectNode::decodeYoloOutput(const std::vector<float>& da
       continue;
     }
 
+    // 将网络输入尺寸上的框缩放回原图，并裁剪到图像边界内。
     int left = static_cast<int>((cx - 0.5F * w) * scale_x);
     int top = static_cast<int>((cy - 0.5F * h) * scale_y);
     int width = static_cast<int>(w * scale_x);
@@ -488,6 +511,7 @@ std::vector<Detection> DetectNode::decodeYoloOutput(const std::vector<float>& da
   }
 
   std::vector<int> keep_indices;
+  // 单个输出张量内部先做 NMS，减少后续跨输出合并的候选数量。
   cv::dnn::NMSBoxes(boxes, confidences, conf_threshold_, nms_threshold_, keep_indices);
 
   std::vector<Detection> detections;
@@ -530,6 +554,7 @@ sensor_msgs::msg::Image::SharedPtr DetectNode::makeImageMsg(const cv::Mat& image
 
 void DetectNode::drawDetections(cv::Mat& image, const std::vector<Detection>& detections) const {
   for (const auto& det : detections) {
+    // 绿色框和文字只用于输出图像/调试窗口，不影响下游 PnP 数据。
     cv::rectangle(image, det.box, cv::Scalar(0, 255, 0), 2);
     const std::string label =
         "id:" + std::to_string(det.class_id) + " conf:" + std::to_string(det.score);

@@ -16,6 +16,7 @@ find_package(ament_cmake_auto REQUIRED)
 ament_auto_find_build_dependencies()
 find_package(CUDAToolkit REQUIRED)
 
+# TensorRT 通常不提供标准 CMake package，这里手动查找头文件和 nvinfer 库。
 find_path(TENSORRT_INCLUDE_DIR
   NAMES NvInfer.h
   PATHS /usr/include/x86_64-linux-gnu /usr/include
@@ -35,6 +36,7 @@ include_directories(
   ${TENSORRT_INCLUDE_DIR}
 )
 
+# detect_node 依赖 TensorRT 和 CUDA runtime，负责神经网络推理。
 set(DRONE_DETECT "drone_detect")
 file(GLOB_RECURSE DRONE_DETECT_SRCS "detect/src/*.cpp")
 
@@ -52,6 +54,7 @@ rclcpp_components_register_node(${DRONE_DETECT}
   EXECUTABLE detect_node
 )
 
+# pnp_node 只依赖 ROS/OpenCV 依赖，用于几何解算和消息转换。
 set(DRONE_PNP "drone_pnp")
 file(GLOB_RECURSE DRONE_PNP_SRCS "pnp/src/*.cpp")
 

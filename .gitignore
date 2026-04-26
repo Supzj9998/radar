@@ -37,3 +37,5 @@ config/merged_bag/
 # Common local model export directories
 model/ONNX/
 model/TensorRT/
+
+video_FGV22100003/

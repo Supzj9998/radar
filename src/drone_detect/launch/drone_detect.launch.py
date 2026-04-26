@@ -5,6 +5,7 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description() -> LaunchDescription:
+    # 模型路径与 engine 路径分开配置：engine 不存在时 detect 节点会尝试由 ONNX 自动构建。
     model_path_arg = DeclareLaunchArgument(
         "model_path",
         default_value="model/ONNX/best.onnx",
@@ -23,6 +24,7 @@ def generate_launch_description() -> LaunchDescription:
         description="Input image topic for detect node.",
     )
 
+    # detect 发布的 boxes_topic 会被 pnp 订阅，是两个节点之间的核心数据通道。
     boxes_topic_arg = DeclareLaunchArgument(
         "boxes_topic",
         default_value="detect/boxes",
@@ -40,6 +42,7 @@ def generate_launch_description() -> LaunchDescription:
         description="Static world extrinsic yaml path containing world_rvec/world_tvec.",
     )
 
+    # YOLO/TensorRT 检测节点：输入图像，输出带框图像和 Float32MultiArray 检测框。
     detect_node = Node(
         package="drone_detect",
         executable="detect_node",
@@ -55,6 +58,7 @@ def generate_launch_description() -> LaunchDescription:
         ],
     )
 
+    # PnP 节点：把检测框转换为目标三维方向/距离，并可发布 AutoAIM 消息。
     pnp_node = Node(
         package="drone_detect",
         executable="pnp_node",
@@ -64,6 +68,7 @@ def generate_launch_description() -> LaunchDescription:
             {
                 "boxes_topic": LaunchConfiguration("boxes_topic"),
                 "require_extrinsic": LaunchConfiguration("require_extrinsic"),
+                # 默认不使用世界外参文件，使用参数内 camera->laser 外参做方向补偿。
                 "use_world_extrinsic_file": False,
                 "use_static_laser_extrinsic": True,
                 "world_extrinsic_file": LaunchConfiguration("world_extrinsic_file"),

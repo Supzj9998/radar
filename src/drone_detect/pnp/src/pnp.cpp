@@ -14,6 +14,7 @@ namespace drone::pnp {
 namespace {
 constexpr double kRadToDeg = 57.29577951308232;
 
+// 统一 frame_id 写法，避免 "/camera" 与 "camera" 或空格导致匹配失败。
 std::string normalizeFrame(std::string frame_id) {
   frame_id.erase(std::remove(frame_id.begin(), frame_id.end(), ' '), frame_id.end());
   while (!frame_id.empty() && frame_id.front() == '/') {
@@ -22,6 +23,7 @@ std::string normalizeFrame(std::string frame_id) {
   return frame_id;
 }
 
+// 将四元数转换为旋转矩阵；非法零四元数回退到单位阵。
 cv::Matx33d quatToMat(double x, double y, double z, double w) {
   const double norm = std::sqrt(x * x + y * y + z * z + w * w);
   if (norm <= 1e-12) {
@@ -38,6 +40,7 @@ cv::Matx33d quatToMat(double x, double y, double z, double w) {
                      1.0 - 2.0 * (x * x + y * y));
 }
 
+// 参数中使用度表示 roll/pitch/yaw，这里转换为 Rz * Ry * Rx 的旋转矩阵。
 cv::Matx33d rpyDegToMat(double roll_deg, double pitch_deg, double yaw_deg) {
   const double roll = roll_deg / kRadToDeg;
   const double pitch = pitch_deg / kRadToDeg;
@@ -64,9 +67,12 @@ cv::Matx33d rpyDegToMat(double roll_deg, double pitch_deg, double yaw_deg) {
 }  // namespace
 
 PnpNode::PnpNode(const rclcpp::NodeOptions& options) : Node("pnp_node", options) {
+  // 话题、坐标系、外参来源和输出格式均通过 ROS 参数配置，launch 中只覆盖常用项。
   boxes_topic_ = this->declare_parameter<std::string>("boxes_topic", "detect/boxes");
   output_topic_ = this->declare_parameter<std::string>("output_topic", "pnp/polar");
   autoaim_topic_ = this->declare_parameter<std::string>("autoaim_topic", "/autoaim/target");
+  autoaim_status_topic_ =
+      this->declare_parameter<std::string>("autoaim_status_topic", "/autoaim/status");
   camera_info_topic_ = this->declare_parameter<std::string>("camera_info_topic", "camera_info");
   extrinsic_topic_ = this->declare_parameter<std::string>("extrinsic_topic", "camera/extrinsic");
   tf_topic_ = this->declare_parameter<std::string>("tf_topic", "/tf");
@@ -79,7 +85,6 @@ PnpNode::PnpNode(const rclcpp::NodeOptions& options) : Node("pnp_node", options)
 
   input_stride_ = this->declare_parameter<int>("input_stride", 10);
   target_class_id_ = this->declare_parameter<int>("target_class_id", -1);
-  use_camera_info_ = this->declare_parameter<bool>("use_camera_info", true);
   use_static_laser_extrinsic_ =
       this->declare_parameter<bool>("use_static_laser_extrinsic", true);
   use_extrinsic_topic_ = this->declare_parameter<bool>("use_extrinsic_topic", false);
@@ -87,12 +92,14 @@ PnpNode::PnpNode(const rclcpp::NodeOptions& options) : Node("pnp_node", options)
   require_extrinsic_ = this->declare_parameter<bool>("require_extrinsic", false);
   use_world_extrinsic_file_ = this->declare_parameter<bool>("use_world_extrinsic_file", false);
   publish_autoaim_ = this->declare_parameter<bool>("publish_autoaim", true);
+  use_autoaim_status_ = this->declare_parameter<bool>("use_autoaim_status", true);
+  require_autoaim_status_ = this->declare_parameter<bool>("require_autoaim_status", true);
   allow_shoot_ = this->declare_parameter<bool>("allow_shoot", false);
   autoaim_target_id_ = this->declare_parameter<int>("autoaim_target_id", 0);
   autoaim_vision_mode_ =
       this->declare_parameter<int>("autoaim_vision_mode", gary_msgs::msg::AutoAIM::VISION_MODE_ARMOR);
   output_in_degrees_ = this->declare_parameter<bool>("output_in_degrees", true);
-  input_is_undistorted_ = this->declare_parameter<bool>("input_is_undistorted", true);
+  input_is_undistorted_ = this->declare_parameter<bool>("input_is_undistorted", false);
   target_width_m_ = this->declare_parameter<double>("target_width_m", 0.072);
   target_height_m_ = this->declare_parameter<double>("target_height_m", 0.050);
   laser_translation_m_ = this->declare_parameter<std::vector<double>>(
@@ -100,28 +107,9 @@ PnpNode::PnpNode(const rclcpp::NodeOptions& options) : Node("pnp_node", options)
   laser_rpy_deg_ = this->declare_parameter<std::vector<double>>(
       "laser_rpy_deg", {0.0, 0.0, 0.0});
 
-  auto camera_k = this->declare_parameter<std::vector<double>>(
-      "camera_matrix", {1280.0, 0.0, 512.0, 0.0, 1280.0, 384.0, 0.0, 0.0, 1.0});
-  auto dist = this->declare_parameter<std::vector<double>>("dist_coeffs", {0.0, 0.0, 0.0, 0.0, 0.0});
-
-  if (camera_k.size() != 9) {
-    RCLCPP_WARN(this->get_logger(),
-                "camera_matrix size is %zu, expected 9. Fallback to identity-like defaults.",
-                camera_k.size());
-    camera_k = {1280.0, 0.0, 512.0, 0.0, 1280.0, 384.0, 0.0, 0.0, 1.0};
-  }
-
-  camera_matrix_ = cv::Mat(3, 3, CV_64F);
-  for (int i = 0; i < 9; ++i) {
-    camera_matrix_.at<double>(i / 3, i % 3) = camera_k[static_cast<size_t>(i)];
-  }
-
-  dist_coeffs_ = cv::Mat::zeros(static_cast<int>(dist.size()), 1, CV_64F);
-  if (!input_is_undistorted_) {
-    for (size_t i = 0; i < dist.size(); ++i) {
-      dist_coeffs_.at<double>(static_cast<int>(i), 0) = dist[i];
-    }
-  }
+  // 不再提供默认内参。PnP 必须等待 camera_info_topic_ 发布真实 CameraInfo。
+  camera_matrix_ = cv::Mat();
+  dist_coeffs_ = cv::Mat::zeros(5, 1, CV_64F);
 
   polar_pub_ = this->create_publisher<base_interface::msg::Polar3f>(output_topic_, 10);
   if (publish_autoaim_) {
@@ -130,11 +118,14 @@ PnpNode::PnpNode(const rclcpp::NodeOptions& options) : Node("pnp_node", options)
   boxes_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
       boxes_topic_, rclcpp::SensorDataQoS(),
       std::bind(&PnpNode::boxesCallback, this, std::placeholders::_1));
-  if (use_camera_info_) {
-    camera_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
-        camera_info_topic_, rclcpp::SensorDataQoS(),
-        std::bind(&PnpNode::cameraInfoCallback, this, std::placeholders::_1));
+  if (use_autoaim_status_) {
+    autoaim_status_sub_ = this->create_subscription<gary_msgs::msg::AutoAIM>(
+        autoaim_status_topic_, rclcpp::SensorDataQoS(),
+        std::bind(&PnpNode::autoaimStatusCallback, this, std::placeholders::_1));
   }
+  camera_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
+      camera_info_topic_, rclcpp::SensorDataQoS(),
+      std::bind(&PnpNode::cameraInfoCallback, this, std::placeholders::_1));
   if (use_extrinsic_topic_) {
     extrinsic_sub_ = this->create_subscription<geometry_msgs::msg::TransformStamped>(
         extrinsic_topic_, 10, std::bind(&PnpNode::extrinsicCallback, this, std::placeholders::_1));
@@ -155,6 +146,7 @@ PnpNode::PnpNode(const rclcpp::NodeOptions& options) : Node("pnp_node", options)
       extrinsic_ready_ = true;
     }
   }
+  // world_extrinsic_file_ 与 laser 外参是两套用途：前者输出世界坐标，后者补偿发射器方向。
   if (use_world_extrinsic_file_) {
     if (loadWorldExtrinsicFromFile(world_extrinsic_file_)) {
       RCLCPP_INFO(this->get_logger(), "Loaded static world extrinsic: %s",
@@ -168,13 +160,18 @@ PnpNode::PnpNode(const rclcpp::NodeOptions& options) : Node("pnp_node", options)
   RCLCPP_INFO(this->get_logger(),
               "PnP node ready. boxes=%s output=%s use_world_extrinsic_file=%s "
               "use_static_laser_extrinsic=%s use_extrinsic_topic=%s use_tf_topic=%s "
-              "require_extrinsic=%s input_is_undistorted=%s",
+              "require_extrinsic=%s use_autoaim_status=%s require_autoaim_status=%s "
+              "input_is_undistorted=%s",
               boxes_topic_.c_str(), output_topic_.c_str(),
               use_world_extrinsic_file_ ? "true" : "false",
               use_static_laser_extrinsic_ ? "true" : "false",
               use_extrinsic_topic_ ? "true" : "false", use_tf_topic_ ? "true" : "false",
               require_extrinsic_ ? "true" : "false",
+              use_autoaim_status_ ? "true" : "false",
+              require_autoaim_status_ ? "true" : "false",
               input_is_undistorted_ ? "true" : "false");
+  RCLCPP_WARN(this->get_logger(), "Waiting for CameraInfo on topic '%s'.",
+              camera_info_topic_.c_str());
 }
 
 void PnpNode::boxesCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg) {
@@ -185,6 +182,7 @@ void PnpNode::boxesCallback(const std_msgs::msg::Float32MultiArray::SharedPtr ms
 
   const BoxDetection* best = nullptr;
   float best_score = -std::numeric_limits<float>::infinity();
+  // 当前策略只跟踪目标类别内置信度最高的一个检测框。
   for (const auto& box : boxes) {
     if (target_class_id_ >= 0 && box.class_id != target_class_id_) {
       continue;
@@ -207,6 +205,7 @@ void PnpNode::boxesCallback(const std_msgs::msg::Float32MultiArray::SharedPtr ms
   }
 
   cv::Vec3d output_vec = tvec;
+  // require_extrinsic=true 时必须等外参有效；否则可直接发布相机坐标系下的结果。
   if (require_extrinsic_) {
     std::lock_guard<std::mutex> lock(param_mutex_);
     if (!extrinsic_ready_) {
@@ -216,7 +215,17 @@ void PnpNode::boxesCallback(const std_msgs::msg::Float32MultiArray::SharedPtr ms
     }
   }
   if (extrinsic_ready_) {
+    // 世界外参与 laser 外参互斥使用：配置 world 时输出世界坐标，否则输出 laser 方向。
     output_vec = use_world_extrinsic_file_ ? cameraToWorld(tvec) : cameraDirectionToLaser(tvec);
+  }
+
+  if (use_autoaim_status_) {
+    std::lock_guard<std::mutex> lock(param_mutex_);
+    if (require_autoaim_status_ && !autoaim_status_ready_) {
+      RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                           "Waiting for /autoaim/status before publishing absolute angles.");
+      return;
+    }
   }
 
   polar_pub_->publish(toPolarMessage(output_vec));
@@ -225,8 +234,22 @@ void PnpNode::boxesCallback(const std_msgs::msg::Float32MultiArray::SharedPtr ms
   }
 }
 
+void PnpNode::autoaimStatusCallback(const gary_msgs::msg::AutoAIM::SharedPtr msg) {
+  std::lock_guard<std::mutex> lock(param_mutex_);
+  current_pitch_rad_ = msg->pitch;
+  current_yaw_rad_ = msg->yaw;
+  autoaim_status_ready_ = true;
+}
+
 void PnpNode::cameraInfoCallback(const sensor_msgs::msg::CameraInfo::SharedPtr msg) {
   std::lock_guard<std::mutex> lock(param_mutex_);
+  // CameraInfo 到达后覆盖静态参数内参，适配实际相机标定结果。
+  if (msg->k[0] <= 0.0 || msg->k[4] <= 0.0) {
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                         "Invalid CameraInfo intrinsics: fx=%f fy=%f.", msg->k[0], msg->k[4]);
+    camera_info_ready_ = false;
+    return;
+  }
   camera_matrix_ = cv::Mat(3, 3, CV_64F);
   for (int i = 0; i < 9; ++i) {
     camera_matrix_.at<double>(i / 3, i % 3) = msg->k[static_cast<size_t>(i)];
@@ -238,6 +261,9 @@ void PnpNode::cameraInfoCallback(const sensor_msgs::msg::CameraInfo::SharedPtr m
       dist_coeffs_.at<double>(static_cast<int>(i), 0) = msg->d[i];
     }
   }
+  camera_info_ready_ = true;
+  RCLCPP_INFO_ONCE(this->get_logger(), "Received CameraInfo from topic '%s'.",
+                   camera_info_topic_.c_str());
 }
 
 void PnpNode::extrinsicCallback(const geometry_msgs::msg::TransformStamped::SharedPtr msg) {
@@ -260,6 +286,7 @@ void PnpNode::tfCallback(const tf2_msgs::msg::TFMessage::SharedPtr msg) {
 bool PnpNode::parseBoxes(const std_msgs::msg::Float32MultiArray::SharedPtr& msg,
                          std::vector<BoxDetection>& boxes) const {
   const size_t kStride = static_cast<size_t>(input_stride_);
+  // stride=10 对应 detect 当前发布格式；stride=6 保留给 x/y/w/h 输入兼容。
   if (kStride != 6U && kStride != 10U) {
     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
                          "Unsupported input_stride=%zu, expected 6 or 10.", kStride);
@@ -282,6 +309,7 @@ bool PnpNode::parseBoxes(const std_msgs::msg::Float32MultiArray::SharedPtr& msg,
     box.class_id = static_cast<int>(msg->data[i]);
     box.score = msg->data[i + 1];
     if (kStride == 10U) {
+      // 四角点顺序要求为左上、右上、右下、左下，与 solvePnP object_points 对齐。
       box.has_corners = true;
       box.corners = {
           cv::Point2f(msg->data[i + 2], msg->data[i + 3]),
@@ -304,6 +332,7 @@ bool PnpNode::parseBoxes(const std_msgs::msg::Float32MultiArray::SharedPtr& msg,
 }
 
 bool PnpNode::solveFromBox(const BoxDetection& box, cv::Vec3d& tvec) const {
+  // 目标平面以中心为原点，Z=0；尺寸单位必须与输出距离单位一致，这里使用米。
   const double half_w = target_width_m_ * 0.5;
   const double half_h = target_height_m_ * 0.5;
 
@@ -317,6 +346,7 @@ bool PnpNode::solveFromBox(const BoxDetection& box, cv::Vec3d& tvec) const {
   std::vector<cv::Point2f> image_points;
   image_points.reserve(4);
   if (box.has_corners) {
+    // 使用检测节点提供的四角点时，PnP 几何约束比仅用矩形宽高更直接。
     image_points.push_back(box.corners[0]);
     image_points.push_back(box.corners[1]);
     image_points.push_back(box.corners[2]);
@@ -337,6 +367,12 @@ bool PnpNode::solveFromBox(const BoxDetection& box, cv::Vec3d& tvec) const {
   cv::Mat dist_coeffs;
   {
     std::lock_guard<std::mutex> lock(param_mutex_);
+    if (!camera_info_ready_ || camera_matrix_.empty()) {
+      RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                           "Waiting for valid CameraInfo before solvePnP.");
+      return false;
+    }
+    // clone 后释放锁，避免 solvePnP 计算期间阻塞 CameraInfo/外参回调。
     camera_matrix = camera_matrix_.clone();
     dist_coeffs = dist_coeffs_.clone();
   }
@@ -349,6 +385,7 @@ bool PnpNode::updateExtrinsicFromTransform(const geometry_msgs::msg::TransformSt
   const std::string parent = normalizeFrame(tf_msg.header.frame_id);
   const std::string child = normalizeFrame(tf_msg.child_frame_id);
 
+  // 只接受 camera 与 laser 两个指定 frame 之间的 TF，其它 TF 消息直接忽略。
   if (!((parent == laser_frame_id_ && child == camera_frame_id_) ||
         (parent == camera_frame_id_ && child == laser_frame_id_))) {
     return false;
@@ -387,6 +424,7 @@ bool PnpNode::loadStaticLaserExtrinsic() {
 }
 
 bool PnpNode::loadWorldExtrinsicFromFile(const std::string& yaml_path) {
+  // 文件约定保存 OpenCV 标定形式：Xc = Rcw * Xw + tcw。
   cv::FileStorage fs(yaml_path, cv::FileStorage::READ);
   if (!fs.isOpened()) {
     return false;
@@ -441,9 +479,16 @@ base_interface::msg::Polar3f PnpNode::toPolarMessage(const cv::Vec3d& tvec) cons
   const double y = tvec[1];
   const double z = tvec[2];
 
-  const double yaw = std::atan2(x, z);
-  const double pitch = std::atan2(-y, std::sqrt(x * x + z * z));
+  // 相机坐标约定：x 向右、y 向下、z 向前；输出 yaw/pitch 使用云台控制方向。
+  double yaw = -std::atan2(x, z);
+  double pitch = -std::atan2(-y, std::sqrt(x * x + z * z));
   const double distance = std::sqrt(x * x + y * y + z * z);
+
+  if (use_autoaim_status_) {
+    std::lock_guard<std::mutex> lock(param_mutex_);
+    yaw += static_cast<double>(current_yaw_rad_);
+    pitch += static_cast<double>(current_pitch_rad_);
+  }
 
   base_interface::msg::Polar3f msg;
   if (output_in_degrees_) {
@@ -461,9 +506,16 @@ gary_msgs::msg::AutoAIM PnpNode::toAutoAimMessage(const cv::Vec3d& tvec) const {
   const double x = tvec[0];
   const double y = tvec[1];
   const double z = tvec[2];
-  const double yaw = std::atan2(x, z);
-  const double pitch = std::atan2(-y, std::sqrt(x * x + z * z));
+  // AutoAIM 消息始终使用弧度，Polar3f 才根据 output_in_degrees_ 决定单位。
+  double yaw = 2 * -std::atan2(x, z);
+  double pitch = 2 * -std::atan2(-y, std::sqrt(x * x + z * z));
   const double distance = std::sqrt(x * x + y * y + z * z);
+
+  if (use_autoaim_status_) {
+    std::lock_guard<std::mutex> lock(param_mutex_);
+    yaw += static_cast<double>(current_yaw_rad_);
+    pitch += static_cast<double>(current_pitch_rad_);
+  }
 
   gary_msgs::msg::AutoAIM msg;
   msg.header.stamp = this->get_clock()->now();
