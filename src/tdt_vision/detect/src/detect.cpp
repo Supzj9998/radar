@@ -391,14 +391,19 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
                                                                   begin);
     std::cout << "Detect Time: " << time_used.count() * 1000 << "ms"
               << std::endl;
-    // 显示调试图像
-    cv::Mat final_img;
-    cv::resize(img, final_img, cv::Size(1536, 1125));
-    cv::imshow("detect", final_img);
-    // 按“r”切换debug模式
-    auto key = cv::waitKey(1);
-    if (key == 'r') {
-        debug = !debug;
+    if (show_window) {
+        // 显示调试图像
+        cv::Mat final_img;
+        cv::resize(img, final_img, cv::Size(1536, 1125));
+        cv::imshow("detect", final_img);
+        // 按“r”切换debug模式
+        auto key = cv::waitKey(1);
+        if (key == 'q' || key == 'Q') {
+            show_window = false;
+            cv::destroyWindow("detect");
+        } else if (key == 'r') {
+            debug = !debug;
+        }
     }
 }
 }  // namespace tdt_radar

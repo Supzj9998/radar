@@ -43,6 +43,7 @@ private:
     // 敌方颜色
     int         EnemyColor;
     int         debug;
+    bool        show_window = true;
     // 模型路径
     std::string yolo_path;
     std::string armor_path;

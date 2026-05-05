@@ -104,8 +104,14 @@ public:
                             cv::Scalar(255, 255, 255));
             }
         }
-        cv::imshow("map", clone_map);
-        cv::waitKey(1);
+        if (show_window) {
+            cv::imshow("map", clone_map);
+            auto key = cv::waitKey(1);
+            if (key == 'q' || key == 'Q') {
+                show_window = false;
+                cv::destroyWindow("map");
+            }
+        }
     }
     void camera_callback(
         const std::shared_ptr<vision_interface::msg::DetectResult> msg)
@@ -309,6 +315,7 @@ public:
     vision_interface::msg::MatchInfo match_info;
     cv::Mat                          map;
     int                              count = 0;
+    bool                             show_window = true;
 };
 }  // namespace tdt_radar
 
