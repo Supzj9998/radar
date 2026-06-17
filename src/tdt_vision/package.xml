@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name> tdt_vision</name>
+  <name>tdt_vision</name>
   <version>0.0.0</version>
   <description>TODO: Package description</description>
   <maintainer email="shenxuewen0127@gmail.com">shenxw</maintainer>
@@ -30,6 +30,14 @@
   <depend>PCL</depend>
   <depend>pcl_msgs</depend>
   <depend>pcl_conversions</depend>
+
+  <exec_depend>camera</exec_depend>
+  <exec_depend>livox_ros2_driver</exec_depend>
+  <exec_depend>dynamic_cloud</exec_depend>
+  <exec_depend>debug_map</exec_depend>
+  <exec_depend>drone_detect</exec_depend>
+  <exec_depend>contact</exec_depend>
+  <exec_depend>serial_bridge</exec_depend>
 
 
   <!-- <depend>builtin_interfaces</depend> -->

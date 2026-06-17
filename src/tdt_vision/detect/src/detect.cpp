@@ -157,7 +157,8 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     // 加载装甲板检测模型
     this->yolo = yolo::load(yolo_path, yolo::Type::V8, 0.65f, 0.45f);
     if (!this->yolo) {
-        throw std::runtime_error("Failed to load yolo engine: " + yolo_path);
+        throw std::runtime_error("Failed to load yolo engine: " +
+                                 yolo_path);
     }
     TDT_INFO("Load yolo engine success!");
     // 创建图像订阅者，调用回调
@@ -168,6 +169,25 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     pub = this->create_publisher<vision_interface::msg::DetectResult>(
         "detect_result", rclcpp::SensorDataQoS());
     RCLCPP_INFO(this->get_logger(), "Detect node has been started.");
+}
+
+void Detect::showImage(const cv::Mat& img)
+{
+    if (!show_window) {
+        return;
+    }
+
+    cv::Mat final_img;
+    cv::resize(img, final_img, cv::Size(1536, 1125));
+    cv::imshow("detect", final_img);
+
+    auto key = cv::waitKey(1);
+    if (key == 'q' || key == 'Q') {
+        show_window = false;
+        cv::destroyWindow("detect");
+    } else if (key == 'r' || key == 'R') {
+        debug = !debug;
+    }
 }
 
 void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
@@ -182,7 +202,7 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
         std::chrono::steady_clock::now();
     std::cout << "Detecting..." << std::endl;
     // ros图像转opencv图像
-    auto             img = cv_bridge::toCvShare(msg, "bgr8")->image;
+    auto img = cv_bridge::toCvShare(msg, "bgr8")->image;
     // opencv图像转推理输入格式
     tdt_radar::Image image(img.data, img.cols, img.rows);
 
@@ -191,9 +211,11 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
     // 初筛，防止车辆过多/过少
     if (result.size() == 0) {
         RCLCPP_INFO(this->get_logger(), "No Car!");
+        showImage(img);
         return;
     } else if (result.size() > MAX_CARS) {
         RCLCPP_INFO(this->get_logger(), "Too Many Car!");
+        showImage(img);
         return;
     }
 
@@ -241,6 +263,7 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
     }  // 将armor_boxes存储到cars中
     if (!has_armor) {
         RCLCPP_INFO(this->get_logger(), "No Armor!");
+        showImage(img);
         return;
     }
 
@@ -391,20 +414,7 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
                                                                   begin);
     std::cout << "Detect Time: " << time_used.count() * 1000 << "ms"
               << std::endl;
-    if (show_window) {
-        // 显示调试图像
-        cv::Mat final_img;
-        cv::resize(img, final_img, cv::Size(1536, 1125));
-        cv::imshow("detect", final_img);
-        // 按“r”切换debug模式
-        auto key = cv::waitKey(1);
-        if (key == 'q' || key == 'Q') {
-            show_window = false;
-            cv::destroyWindow("detect");
-        } else if (key == 'r') {
-            debug = !debug;
-        }
-    }
+    showImage(img);
 }
 }  // namespace tdt_radar
 RCLCPP_COMPONENTS_REGISTER_NODE(tdt_radar::Detect)

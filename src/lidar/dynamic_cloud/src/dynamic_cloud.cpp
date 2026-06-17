@@ -57,17 +57,17 @@ void DynamicCloud::GetDynamicCloud(
     int thread_num)
 {
     // KD 树搜索时只找最近的 1 个点。
-    int                                         K = 1;
+    int K = 1;
     // 创建线程容器
-    std::vector<std::thread>                    threads;
+    std::vector<std::thread> threads;
     // 给每个线程准备一个局部点云
     std::vector<pcl::PointCloud<pcl::PointXYZ>> clouds(thread_num);
     // 记录开始时间
     auto start = std::chrono::system_clock::now();
     // 输入点云的大小
-    int  cloud_size = input_cloud.points.size();
+    int cloud_size = input_cloud.points.size();
     // 计算每个线程负责多少点
-    int  step = cloud_size / thread_num;
+    int step = cloud_size / thread_num;
     // 创建多个线程
     for (int i = 0; i < thread_num; i++) {
         threads.push_back(std::thread([i, step, cloud_size, &clouds,
@@ -101,24 +101,24 @@ void DynamicCloud::GetDynamicCloud(
 // 坐标变换
 void TransformCloud(
     // 输入点云
-    pcl::PointCloud<pcl::PointXYZ>&      input_cloud,
+    pcl::PointCloud<pcl::PointXYZ>& input_cloud,
     // 输出点云
-    pcl::PointCloud<pcl::PointXYZ>&      output_cloud,
+    pcl::PointCloud<pcl::PointXYZ>& output_cloud,
     // TF变换
     geometry_msgs::msg::TransformStamped transform_stamped,
     // 线程数
-    int                                  thread_num)
+    int thread_num)
 {
     // 创建线程函数
-    std::vector<std::thread>                    threads;
+    std::vector<std::thread> threads;
     // 给每个线程准备一个局部结果点云
     std::vector<pcl::PointCloud<pcl::PointXYZ>> clouds(thread_num);
     // 记录开始时间
     auto start = std::chrono::system_clock::now();
     // 获取输入点云大小
-    int  cloud_size = input_cloud.points.size();
+    int cloud_size = input_cloud.points.size();
     // 计算每个线程处理多少点
-    int  step = cloud_size / thread_num;
+    int step = cloud_size / thread_num;
 
     // 单位仿射变换
     Eigen::Affine3f transform = Eigen::Affine3f::Identity();
@@ -183,19 +183,19 @@ void DynamicCloud::callback(
     auto fly_safe_filter = [](pcl::PointXYZ& point) {
         return (point.x > 28 - 2.775 && point.x < 27.5) &&
                (point.y > 0.2 && point.y < 2.2) &&
-               (point.z > 1.7 && point.z < 3);
+               (point.z > 1.4 && point.z < 3);
     };  // 飞机起飞
 
     auto fly_warn_filter = [](pcl::PointXYZ& point) {
         return (point.x > 19.83 && point.x < 28 - 2.7) &&
                (point.y > 0.2 && point.y < 1.356 + 2.4 + 0.8) &&
-               (point.z > 1.7 && point.z < 3);
+               (point.z > 1.4 && point.z < 3);
     };  // 飞机飞到半场
 
     auto fly_alarm_filter = [](pcl::PointXYZ& point) {
         return (point.x > 13 && point.x < 20.5) &&
                (point.y > 0.2 && point.y < 1.356 + 2.4 + 0.8) &&
-               (point.z > 1.7 && point.z < 3);
+               (point.z > 1.4 && point.z < 3);
     };  // 飞机飞到中场
     // 把ros点云消息转换成pcl点云
     auto receive_cloud = pcl::PointCloud<pcl::PointXYZ>();
@@ -221,7 +221,7 @@ void DynamicCloud::callback(
     // 定义变换后的点云
     pcl::PointCloud<pcl::PointXYZ> transformed_cloud;
     // 准备仿射变换
-    auto                           transform = Eigen::Affine3f::Identity();
+    auto transform = Eigen::Affine3f::Identity();
     transform.translation() << transform_stamped.transform.translation.x,
         transform_stamped.transform.translation.y,
         transform_stamped.transform.translation.z;
@@ -252,7 +252,7 @@ void DynamicCloud::callback(
                     (point.z > 2.4722 - 0.859 + 0.1 && point.z < 2.4722) ||
                 (point.x > 13 && point.x < 27.5) &&
                     (point.y > 0.2 && point.y < 1.356 + 2.4 + 0.8) &&
-                    (point.z > 1.7 && point.z < 3)) {
+                    (point.z > 1.4 && point.z < 3)) {
                 other_filtered_cloud.push_back(point);
             }
             continue;
@@ -316,7 +316,9 @@ void DynamicCloud::callback(
         }
     }
 
-    // 如果在飞镖检测区域里累计到的点数超过 5 个，就认为“检测到了飞镖相关目标”，然后输出警告日志  lidar_detect.dart_state = 1
+    // 如果在飞镖检测区域里累计到的点数超过 5
+    // 个，就认为“检测到了飞镖相关目标”，然后输出警告日志
+    // lidar_detect.dart_state = 1
     if (dart_cloud.size() > 5) {
         RCLCPP_WARN(rclcpp::get_logger("rclcpp"), "Find dart cloud!");
         RCLCPP_WARN(rclcpp::get_logger("rclcpp"), "Dart cloud size: %zu",

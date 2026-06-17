@@ -37,6 +37,7 @@ private:
     std::shared_ptr<Infer<int>> classifier;
     // 发布器
     rclcpp::Publisher<vision_interface::msg::DetectResult>::SharedPtr pub;
+    void showImage(const cv::Mat& img);
 
     // 是否正在处理rosbag
     bool        if_rosbag = false;

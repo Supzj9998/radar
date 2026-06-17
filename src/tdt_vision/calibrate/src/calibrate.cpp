@@ -1,4 +1,5 @@
 #include "calibrate.h"
+#include <cmath>
 #include <string>
 
 namespace tdt_radar {
@@ -58,6 +59,7 @@ void Calibrate::callback(const sensor_msgs::msg::Image::SharedPtr msg)
     // ros转opencv
     auto    img = cv_bridge::toCvCopy(msg, "bgr8")->image;
     cv::Mat calib_img;
+    raw_image_size = img.size();
     cv::resize(img, calib_img, cv::Size(1536, 1125));
     cvimage_ = calib_img;
     // 判断是否标定
@@ -97,6 +99,7 @@ void Calibrate::compressed_callback(
     auto    img = cv::imdecode(msg->data, cv::IMREAD_COLOR);
     cv::Mat calib_img;
     // 生成标定用缩放图
+    raw_image_size = img.size();
     cv::resize(img, calib_img, cv::Size(1536, 1125));
     cvimage_ = calib_img;
     if (is_calibrating) {
@@ -171,8 +174,12 @@ void mousecallback(int event, int x, int y, int flags, void* userdata)
             // 标定
             while (temp_key != 'n');
 
-            x *= 1.3333333333 * 2;
-            y *= 1.3333333333 * 2;
+            const double scale_x =
+                static_cast<double>(raw_image_size.width) / cvimage_.cols;
+            const double scale_y =
+                static_cast<double>(raw_image_size.height) / cvimage_.rows;
+            x = static_cast<int>(std::round(x * scale_x));
+            y = static_cast<int>(std::round(y * scale_y));
             // 打印当前点
             std::cout << "x:" << x << " y:" << y << std::endl;
             pick_points.push_back(cv::Point2f(x, y));

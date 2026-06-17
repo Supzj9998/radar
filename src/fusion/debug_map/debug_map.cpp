@@ -29,7 +29,7 @@ public:
                 std::bind(&DebugMap::camera_callback, this,
                           std::placeholders::_1));
         // 读取地图图片
-        map = cv::imread("config/RM2025.png");
+        map = cv::imread("config/RM2026.png");
         // 订阅比赛信息话题，进save_match_info
         match_info_sub =
             this->create_subscription<vision_interface::msg::MatchInfo>(

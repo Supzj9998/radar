@@ -9,7 +9,7 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     //创建parser_对象
     parser_ = new parser();
     //读取小地图图像
-    minimap = cv::imread("config/RM2025.png");
+    minimap = cv::imread("config/RM2026.png");
     //订阅camera_point2D
     point_sub = this->create_subscription<geometry_msgs::msg::Vector3>(
         "camera_point2D", rclcpp::SensorDataQoS(),
