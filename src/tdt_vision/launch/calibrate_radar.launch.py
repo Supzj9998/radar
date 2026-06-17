@@ -29,14 +29,14 @@ def generate_launch_description():
             extra_arguments=[{'use_intra_process_comms': True}]
         )        
 
-    def get_camera_detector_container(camera_node,calib_node):
+    def get_camera_detector_container(calib_node):
         return ComposableNodeContainer(
             name='camera_detector_container',
             namespace='',
             package='rclcpp_components',
             executable='component_container',
             composable_node_descriptions=[
-                camera_node,
+                # camera_node,
                 calib_node
             ],
             output='both',
@@ -47,8 +47,8 @@ def generate_launch_description():
 
     calib_node = get_radar_calib_node('tdt_vision', 'tdt_radar::Calibrate')
     # 相机包不包含在内，需自行准备
-    hik_camera_node = get_camera_node('tdt_vision', 'tdt_vision::NodeCamera')
-    cam_detector = get_camera_detector_container(hik_camera_node,calib_node)
+    # hik_camera_node = get_camera_node('tdt_vision', 'tdt_vision::NodeCamera')
+    cam_detector = get_camera_detector_container(calib_node)
 
     return LaunchDescription([
             cam_detector

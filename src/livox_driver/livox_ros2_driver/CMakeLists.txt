@@ -2,6 +2,21 @@
 
 cmake_minimum_required(VERSION 3.5)
 project(livox_ros2_driver)
+set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS 1)
+if(POLICY CMP0144)
+  cmake_policy(SET CMP0144 NEW)
+endif()
+set(CMAKE_POLICY_DEFAULT_CMP0144 NEW)
+if(POLICY CMP0074)
+  cmake_policy(SET CMP0074 NEW)
+endif()
+set(CMAKE_POLICY_DEFAULT_CMP0074 NEW)
+set(ENV{FLANN_ROOT} "")
+set(ENV{PCL_ROOT} "")
+unset(FLANN_ROOT)
+unset(FLANN_ROOT CACHE)
+unset(PCL_ROOT)
+unset(PCL_ROOT CACHE)
 
 # Default to C99
 if(NOT CMAKE_C_STANDARD)
@@ -110,7 +125,8 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
-ament_auto_package(INSTALL_TO_SHARE
+ament_auto_package(USE_SCOPED_HEADER_INSTALL_DIR
+  INSTALL_TO_SHARE
   config
   launch
 )

@@ -1,5 +1,20 @@
 cmake_minimum_required(VERSION 3.8)
 project(tdt_vision)
+set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS 1)
+if(POLICY CMP0144)
+  cmake_policy(SET CMP0144 NEW)
+endif()
+set(CMAKE_POLICY_DEFAULT_CMP0144 NEW)
+if(POLICY CMP0074)
+  cmake_policy(SET CMP0074 NEW)
+endif()
+set(CMAKE_POLICY_DEFAULT_CMP0074 NEW)
+set(ENV{FLANN_ROOT} "")
+set(ENV{PCL_ROOT} "")
+unset(FLANN_ROOT)
+unset(FLANN_ROOT CACHE)
+unset(PCL_ROOT)
+unset(PCL_ROOT CACHE)
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 20)
@@ -18,15 +33,21 @@ ament_auto_find_build_dependencies()
 option(CUDA_USE_STATIC_CUDA_RUNTIME OFF)
 set(CMAKE_BUILD_TYPE Debug)
 
-if(NOT DEFINED CMAKE_CUDA_COMPILER AND EXISTS "/usr/bin/nvcc")
-  set(CMAKE_CUDA_COMPILER "/usr/bin/nvcc")
+if(NOT DEFINED CMAKE_CUDA_COMPILER)
+  if(DEFINED ENV{CUDACXX} AND NOT "$ENV{CUDACXX}" STREQUAL "")
+    set(CMAKE_CUDA_COMPILER "$ENV{CUDACXX}" CACHE FILEPATH "CUDA compiler" FORCE)
+  elseif(EXISTS "/usr/local/cuda/bin/nvcc")
+    set(CMAKE_CUDA_COMPILER "/usr/local/cuda/bin/nvcc" CACHE FILEPATH "CUDA compiler" FORCE)
+  elseif(EXISTS "/usr/bin/nvcc")
+    set(CMAKE_CUDA_COMPILER "/usr/bin/nvcc" CACHE FILEPATH "CUDA compiler" FORCE)
+  endif()
 endif()
 
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR "${CMAKE_CUDA_ARCHITECTURES}" STREQUAL "")
   if(DEFINED ENV{CUDAARCHS} AND NOT "$ENV{CUDAARCHS}" STREQUAL "")
     set(CMAKE_CUDA_ARCHITECTURES "$ENV{CUDAARCHS}" CACHE STRING "CUDA architectures" FORCE)
   else()
-    set(CMAKE_CUDA_ARCHITECTURES 75 CACHE STRING "CUDA architectures" FORCE)
+    set(CMAKE_CUDA_ARCHITECTURES 86 CACHE STRING "CUDA architectures" FORCE)
   endif()
 endif()
 
@@ -86,6 +107,7 @@ rclcpp_components_register_node(${RADAR_CALIBRATE}
 
 
 ament_auto_package(
+    USE_SCOPED_HEADER_INSTALL_DIR
     INSTALL_TO_SHARE
     launch
 )
